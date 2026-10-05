@@ -295,6 +295,22 @@ def venue_class(names: str, license_description: str | None,
     return "C", "restaurant or other (no bar or club signal)"
 
 
+def a_by_name_only(names: str, license_keys=(), license_description: str | None = None) -> bool:
+    """True when a tier A venue is A only because its name has a club or
+    lounge word: no nightlife license (any NIGHTLIFE_LICENSE_POINTS key or a
+    cabaret or nightclub license description), no ticketed-venue word, no
+    stadium concessionaire. Only these can be shown as B when Google lists
+    the place as a restaurant (contact.google_tier)."""
+    names = (names or "").upper()
+    if any(k in NIGHTLIFE_LICENSE_POINTS or k in TICKETED_LICENSES for k in license_keys):
+        return False
+    if NIGHTCLUB_LICENSES.search((license_description or "").upper()):
+        return False
+    if CONCESSIONAIRES.search(names) or TICKETED_WORDS.search(names):
+        return False
+    return bool(NIGHTCLUB_WORDS.search(names)) and not NOT_NIGHTCLUB.search(names)
+
+
 @dataclass
 class Qualification:
     qualified: bool

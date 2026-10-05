@@ -75,6 +75,20 @@ DEFAULT_MIN_B_SCORE = 60
 STAGE_OPTIONS = ["Licensed", "Approved", "In review", "Received"]
 PRIORITY_OPTIONS = ["Hot", "A", "B"]
 STATUS_OPTIONS = ["New", "Moved to Targets", "Not a fit", "Contacted"]
+#: The team's list Status values that keep a venue off the daily plan: the
+#: team has worked it already (outreach.py).
+PLAN_EXCLUDED_STATUSES = ("Contacted", "Not a fit", "Moved to Targets")
+#: Target statuses (target_client.status) from before any outreach. Every
+#: other one (1st Outreach sent, Follow up sent, In conversation ...) means
+#: someone is already working the venue. Attio's own spellings
+#: (speakeasy-attio-crm/SCHEMA.md). Targets are prospects: active clients
+#: live in another object (Client), which this project does not read.
+TARGET_UNWORKED = ("Prespecting", "Haven't found contact")
+
+
+def target_worked(status: str | None) -> bool:
+    """A Target status that means outreach has already happened."""
+    return bool(status) and status not in TARGET_UNWORKED
 
 #: List entry attributes: (api_slug, title, type, is_unique, select options).
 #: Attio has no URL attribute type, so links are text. Market and State are

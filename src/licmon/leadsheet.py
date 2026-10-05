@@ -27,6 +27,7 @@ from datetime import date, datetime, timezone
 from urllib.parse import quote_plus
 
 from . import history as history_mod
+from . import qualify as qualify_mod
 from . import stage as stage_mod
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -76,7 +77,19 @@ CONTACT_COLUMNS: list[tuple[str, str, int]] = [
     ("confidence", "Confidence", 14),
     ("confidence_reason", "Why we trust it", 54),
     ("outreach_second", "Second best way", 26),
+    ("current_platform", "Current platform", 22),
+    ("opening_text", "Opening soon", 22),
+    ("google_says", "Google says", 30),
+    ("pipeline", "Speakeasy / Attio", 24),
 ]
+#: Review statuses that keep a lead open: wrong_contact is still being
+#: looked up (the contact lookup checks it again for another channel).
+OPEN_STATUSES = ("new", "wrong_contact")
+#: Most advanced first: a venue's review status is the most advanced of its
+#: records' statuses.
+REVIEW_ORDER = ("won", "replied", "contacted", "rejected", "snoozed", "wrong_contact",
+                "approved", "new")
+NO_PLATFORM = "None found on their site"
 FILING_PHONE_HEADER = "Filing phone (may be a lawyer)"
 WAITING_TAB = "Waiting on contact"
 NEWLY_REACHABLE = "Newly reachable"
@@ -191,6 +204,29 @@ def _filing(app_types: list[str], source: str) -> str:
     if not labels and source == "ca_abc_applications":
         return "New application"  # CA export lists pending applications only
     return ", ".join(labels)
+
+
+def _license_keys(recs: list[dict], sources: dict) -> list[str]:
+    """Nightlife license keys (qualify.NIGHTLIFE_LICENSE_POINTS) across a
+    venue's records, from each source's own rule."""
+    from .models import Record
+
+    keys: list[str] = []
+    for rec in recs:
+        src = sources.get(rec.get("source"))
+        if not src:
+            continue
+        try:
+            found = src.nightlife_license(Record(
+                source=rec.get("source") or "", source_record_id="", source_url="",
+                license_type=rec.get("license_type"),
+                license_description=rec.get("license_description"),
+                application_type=rec.get("application_type"), status=rec.get("status"),
+                raw=rec.get("raw") or {}))
+        except Exception:  # noqa: BLE001 - a label only
+            found = ()
+        keys += [k for k in found if k not in keys]
+    return keys
 
 
 def _stage(recs: list[dict], sources: dict) -> str:
@@ -314,7 +350,7 @@ SELECT q.queue_date, q.record_id, q.venue_key, q.tier, q.score, q.legal_name,
 FROM review_queue q JOIN records r ON r.id = q.record_id
 WHERE r.qualified
   AND (%(day)s::date IS NULL OR q.queue_date = %(day)s)
-  AND (NOT %(open)s OR q.review_status = 'new')
+  AND (NOT %(open)s OR q.review_status = ANY(%(open_statuses)s))
   AND (%(keys)s::text[] IS NULL OR q.venue_key = ANY(%(keys)s))
 ORDER BY q.queue_date DESC, q.score DESC, q.record_id
 """
@@ -335,7 +371,8 @@ def load_rows(conn, day: date | None, open_only: bool = False,
     rows also include venues that became reachable that day although they
     were queued earlier (open ones only)."""
     with conn.cursor() as cur:
-        cur.execute(_SQL, {"day": day, "open": open_only, "keys": venue_keys})
+        cur.execute(_SQL, {"day": day, "open": open_only, "keys": venue_keys,
+                           "open_statuses": list(OPEN_STATUSES)})
         records = [dict(zip(_FIELDS, r)) for r in cur.fetchall()]
     rows = group_records(records)
     if venue_keys is not None:
@@ -370,7 +407,8 @@ def _has_contact_table(conn) -> bool:
 _CHECK_FIELDS = ["venue_key", "status", "channels", "confidence_score", "confidence_label",
                  "confidence_reason", "outreach_method", "outreach_second", "contact_kind",
                  "contact_value", "contact_url", "maps_url", "last_checked_at",
-                 "next_check_at", "newly_reachable_on"]
+                 "next_check_at", "newly_reachable_on", "platforms", "opening_soon",
+                 "opening_signal", "google_primary_type", "tier_adjusted", "google_says"]
 
 
 def attach_contacts(conn, rows: list[dict], day: date | None = None) -> None:
@@ -445,7 +483,60 @@ def apply_contact(row: dict, check: dict, day: date | None = None) -> dict:
         "possible_instagram_2_url_text": possible[1].value if possible[1] else None,
         "verified_facebook_url": url(contact.FACEBOOK),
     })
+    apply_found(row, check)
     return row
+
+
+def apply_found(row: dict, check: dict) -> dict:
+    """The lookup's other finds on a lead row: the platform on the venue's
+    site, opening soon, and Google's type. When Google's type moves the
+    tier (contact.google_tier), Priority shows the new tier everywhere
+    (sheet, plan, Attio), a venue moved to B is not Hot, and Google says
+    explains it. The filed tier stays in priority_filed."""
+    from . import contact
+
+    platforms = check.get("platforms")
+    signal = check.get("opening_signal")
+    soon = bool(check.get("opening_soon"))
+    row.update({
+        "platforms": list(platforms) if platforms is not None else None,
+        "current_platform": ("" if platforms is None
+                             else ", ".join(platforms) or NO_PLATFORM),
+        "on_speakeasy": contact.SPEAKEASY in (platforms or []),
+        "opening_soon": soon,
+        "opening_signal": signal,
+        "opening_text": (f"Yes: {signal}" if soon and signal
+                         else "Now open" if signal == contact.NOW_OPEN else ""),
+        "google_type": check.get("google_primary_type"),
+        "google_says": (contact.google_label(check.get("google_primary_type")) or "").capitalize(),
+    })
+    filed = row.get("priority_filed") or row.get("priority")
+    tier = check.get("tier_adjusted")
+    if tier and tier != filed:
+        row["priority_filed"] = filed
+        row["priority"] = tier
+        if tier != "A":
+            row["hot"] = ""
+        row["business_type"] = _business_type(tier, [], row.get("adult"))
+        row["google_says"] = f"{check.get('google_says')}. Shown as {tier}, filed as {filed}"
+    row["pipeline"] = pipeline_note(row)
+    return row
+
+
+def pipeline_note(row: dict) -> str:
+    """Already on Speakeasy (its site links Speakeasy) or already worked in
+    Attio ("In Attio: Contacted"): such venues stay off the plan."""
+    from . import attio
+
+    if row.get("on_speakeasy"):
+        return "Already on Speakeasy"
+    status = row.get("attio_list_status")
+    if status in attio.PLAN_EXCLUDED_STATUSES:
+        return f"In Attio: {status}"
+    target = row.get("attio_target_status")
+    if target and attio.target_worked(target):
+        return f"In Attio: Target {target}"
+    return ""
 
 
 def group_records(records: list[dict]) -> list[dict]:
@@ -481,6 +572,9 @@ def group_records(records: list[dict]) -> list[dict]:
         since = [r["prior_since"] for r in recs if r.get("prior_since")]
         people = _people(contacts, (top.get("dba") or None, top.get("legal_name")))
         person = _contact_person(people)
+        priority = min((r.get("tier") or "C") for r in recs)
+        keys = _license_keys(recs, by_source)
+        names = " ".join(x for x in (top.get("dba"), top.get("legal_name")) if x)
         rows.append({
             "queue_date": queue_date,
             "venue_key": top.get("venue_key"),
@@ -522,6 +616,11 @@ def group_records(records: list[dict]) -> list[dict]:
             "record_url": top.get("source_url"),
             "lead_ids": " ".join(str(r["record_id"]) for r in
                                  sorted(recs, key=lambda r: r["record_id"])),
+            "license_keys": keys,
+            "name_only_a": priority == "A" and qualify_mod.a_by_name_only(
+                names, keys, "; ".join(_uniq(r.get("license_description") for r in recs))),
+            "review_status": next((s for s in REVIEW_ORDER
+                                   if any(r.get("review_status") == s for r in recs)), "new"),
         })
     rows.sort(key=sort_key)
     return rows

@@ -221,3 +221,16 @@ CREATE TABLE IF NOT EXISTS contact_checks (
 );
 CREATE INDEX IF NOT EXISTS contact_checks_due_idx ON contact_checks (status, next_check_at);
 CREATE INDEX IF NOT EXISTS contact_checks_newly_idx ON contact_checks (newly_reachable_on);
+-- Added with the outreach plan (contact.py). Found on the same calls, no
+-- extra lookups: the booking/ticketing/POS platforms the venue's home page
+-- links, opening-soon signals, Google's venue type and the tier it implies,
+-- and contact values the owner marked wrong (never offered again).
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS platforms JSONB;       -- names found; NULL = home page not read
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS opening_soon BOOLEAN;
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS opening_signal TEXT;   -- "coming soon", "now open", "no Google reviews yet" ...
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS google_primary_type TEXT;
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS google_types JSONB;
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS rating_count INTEGER;
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS tier_adjusted TEXT;    -- A or B when Google's type moves the tier
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS google_says TEXT;      -- "Google says nightclub"
+ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS bad_channels JSONB NOT NULL DEFAULT '[]';  -- [{kind, value}] marked wrong_contact

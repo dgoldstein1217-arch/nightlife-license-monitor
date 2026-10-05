@@ -31,6 +31,16 @@ Per venue (keyed by daily_leads.venue_key):
 5. The filing's own phone is a weak signal (often a lawyer or expediter):
    it never makes a venue reachable on its own.
 
+The same calls also give, at no extra cost: the booking, ticketing or POS
+platform the home page links or embeds (PLATFORMS; Speakeasy itself means
+the venue is already a client), signs that the venue is about to open
+(opening_signal: "coming soon" on its site or Instagram, no Google reviews
+yet, Google saying it is not open yet), and Google's venue type, which can
+move the tier shown on the sheet, the plan and Attio (google_tier).
+
+A channel the owner marked wrong (``licmon review --status wrong_contact``)
+is stored in contact_checks.bad_channels and never offered again.
+
 Each channel gets a 0 to 100 score and a label (POINTS and LABEL_MIN below;
 the table is in AGENTS.md). A venue is reachable when at least one channel
 is Verified or Likely. METHOD_RULES pick the best and second-best way to
@@ -65,7 +75,8 @@ log = logging.getLogger("licmon")
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 #: Only what the checks need (Places bills by the fields asked for).
 PLACES_FIELDS = ("id", "displayName", "formattedAddress", "addressComponents",
-                 "nationalPhoneNumber", "websiteUri", "googleMapsUri", "businessStatus")
+                 "nationalPhoneNumber", "websiteUri", "googleMapsUri", "businessStatus",
+                 "userRatingCount", "primaryType", "types")
 FIELD_MASK = ",".join("places." + f for f in PLACES_FIELDS)
 PLACES_RESULTS = 5
 SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
@@ -168,6 +179,130 @@ def search_reason(ch: Channel) -> str:
             + " match")
 
 WAIT_METHOD = "Wait: no verified contact yet"
+
+# ---------------------------------------------------------------------------
+# Current platform, opening soon, Google's venue type
+# ---------------------------------------------------------------------------
+
+SPEAKEASY = "Speakeasy"
+#: Booking, ticketing and POS platforms found in the venue home page's links,
+#: scripts and iframes: (name, domain pattern). Speakeasy is the owner's own
+#: product: a venue that links it is already a client.
+PLATFORMS = [
+    ("SevenRooms", r"sevenrooms\.com"),
+    ("Tock", r"exploretock\.com"),
+    ("OpenTable", r"opentable\.com"),
+    ("Resy", r"resy\.com"),
+    ("Eventbrite", r"eventbrite\.(?:com|co\.uk|ca)|evbuc\.com"),
+    ("DICE", r"dice\.fm"),
+    ("Posh", r"posh\.vip"),
+    ("Tixr", r"tixr\.com"),
+    ("Ticketmaster", r"ticketmaster\.com"),
+    ("AXS", r"axs\.com"),
+    ("See Tickets", r"seetickets\.(?:us|com)"),
+    ("Etix", r"etix\.com"),
+    ("Tablelist", r"tablelist\.com"),
+    ("Discotech", r"discotech\.me"),
+    ("UrVenue", r"urvenue\.(?:com|me|net)"),
+    ("Toast", r"toasttab\.com"),
+    ("Square", r"squareup\.com|square\.site"),
+    ("Clover", r"clover\.com"),
+    ("Yelp Reservations", r"yelp\.com/reservations"),
+    (SPEAKEASY, r"speakeasygo\.com"),
+]
+_PLATFORM_RES = [(name, re.compile(r"(?<![a-z0-9-])(?:" + pat + r")(?![a-z0-9-])", re.I))
+                 for name, pat in PLATFORMS]
+
+
+def detect_platforms(refs: list[str]) -> list[str]:
+    """Platform names (PLATFORMS order) in link targets, script sources and
+    inline script text."""
+    text = "\n".join(refs)
+    return [name for name, pat in _PLATFORM_RES if pat.search(text)]
+
+
+NOW_OPEN = "now open"
+NO_REVIEWS = "no Google reviews yet"
+NOT_OPEN_ON_GOOGLE = "Google says not open yet"
+_MONTHS = (r"(?:(?i:january|february|march|april|june|july|august|september|october|"
+           r"november|december)|May|MAY)")
+#: Words on the venue's site, Instagram bio or search snippet that say it is
+#: about to open: (label, pattern). "now open" means it just opened.
+OPENING_WORDS = [
+    ("coming soon", re.compile(r"\bcoming soon\b", re.I)),
+    ("opening soon", re.compile(r"\bopening soon\b", re.I)),
+    ("grand opening", re.compile(r"\bgrand opening\b", re.I)),
+    ("soft opening", re.compile(r"\bsoft[- ]?open(?:ing)?\b", re.I)),
+    ("opening in {month}", re.compile(r"(?i:\bopening\s+(?:in\s+)?)(" + _MONTHS + r")\b")),
+]
+_NOW_OPEN = re.compile(r"\bnow open\b", re.I)
+
+
+def opening_signal(text: str | None) -> str | None:
+    """A short label ("coming soon", "opening in October", "now open") from
+    page or snippet text, or None. "now open" wins: the venue is open."""
+    if not text:
+        return None
+    if _NOW_OPEN.search(text):
+        return NOW_OPEN
+    for label, pat in OPENING_WORDS:
+        found = pat.search(text)
+        if found:
+            return label.format(month=found.group(1).title() if found.groups() else "")
+    return None
+
+
+#: Google primary types that are tier A venues (Places API (New) types), with
+#: the plain word the sheet shows.
+GOOGLE_A_TYPES = {"night_club": "nightclub", "comedy_club": "comedy club",
+                  "live_music_venue": "live music venue", "concert_hall": "concert hall",
+                  "performing_arts_theater": "theater", "event_venue": "event venue",
+                  "stadium": "stadium", "arena": "arena", "dance_hall": "dance hall"}
+#: Bar types (tier B venues).
+GOOGLE_BAR_TYPES = {"bar", "pub", "brewery", "wine_bar", "bar_and_grill", "cocktail_bar",
+                    "lounge_bar", "sports_bar", "irish_pub", "beer_garden", "brewpub",
+                    "hookah_bar", "karaoke", "winery", "distillery"}
+#: Restaurant family besides every "*_restaurant" type.
+GOOGLE_FOOD_TYPES = {"restaurant", "cafe", "coffee_shop", "bakery", "meal_takeaway",
+                     "meal_delivery", "sandwich_shop", "diner", "steak_house", "food_court",
+                     "deli", "bagel_shop", "donut_shop", "juice_shop", "tea_house",
+                     "cafeteria", "ice_cream_shop", "dessert_shop", "acai_shop",
+                     "confectionery", "chocolate_shop", "bistro", "brasserie", "pizzeria"}
+
+
+def is_food_type(primary_type: str | None) -> bool:
+    return bool(primary_type) and (primary_type in GOOGLE_FOOD_TYPES
+                                   or primary_type.endswith("_restaurant"))
+
+
+def google_label(primary_type: str | None) -> str | None:
+    """Plain words for a Google type: "night_club" -> "nightclub",
+    "mexican_restaurant" -> "restaurant"."""
+    if not primary_type:
+        return None
+    if primary_type in GOOGLE_A_TYPES:
+        return GOOGLE_A_TYPES[primary_type]
+    if primary_type.endswith("_restaurant"):
+        return "restaurant"
+    return primary_type.replace("_", " ")
+
+
+def google_tier(priority: str | None, name_only_a: bool,
+                primary_type: str | None) -> tuple[str | None, str | None]:
+    """(tier to show, note) when Google's type for a same-name listing
+    disagrees with the filing's tier, else (None, None):
+
+    * a B or C venue Google calls a nightclub or ticketed venue
+      (GOOGLE_A_TYPES) shows as A, "Google says nightclub";
+    * an A venue whose A came from a club or lounge name only (no nightlife
+      license, no ticketed-venue word: leadsheet name_only_a) that Google
+      calls a restaurant, cafe or bakery shows as B, "Google says restaurant".
+    """
+    if primary_type in GOOGLE_A_TYPES and priority in ("B", "C"):
+        return "A", f"Google says {GOOGLE_A_TYPES[primary_type]}"
+    if is_food_type(primary_type) and priority == "A" and name_only_a:
+        return "B", f"Google says {google_label(primary_type)}"
+    return None, None
 
 
 class ContactError(RuntimeError):
@@ -418,15 +553,38 @@ def search_query(row: dict) -> str:
 # ---------------------------------------------------------------------------
 
 class _Links(HTMLParser):
+    """Links, every attribute value and inline script (for platforms), and
+    the visible text plus the meta description (for opening words)."""
+
+    _HIDDEN = {"script", "style", "noscript", "template", "svg"}
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.hrefs: list[str] = []
+        self.refs: list[str] = []
+        self.text: list[str] = []
+        self._hidden: list[str] = []
 
     def handle_starttag(self, tag, attrs):
-        if tag == "a":
-            for key, value in attrs:
-                if key == "href" and value:
-                    self.hrefs.append(value.strip())
+        values = dict((k, v) for k, v in attrs if v)
+        if tag == "a" and values.get("href"):
+            self.hrefs.append(values["href"].strip())
+        self.refs += [v for k, v in attrs if v and k != "class" and k != "style"]
+        if tag == "meta" and (values.get("name") or values.get("property") or "").lower() in (
+                "description", "og:description", "og:title"):
+            self.text.append(values.get("content") or "")
+        if tag in self._HIDDEN:
+            self._hidden.append(tag)
+
+    def handle_endtag(self, tag):
+        if self._hidden and self._hidden[-1] == tag:
+            self._hidden.pop()
+
+    def handle_data(self, data):
+        if not self._hidden:
+            self.text.append(data)
+        elif self._hidden[-1] == "script":
+            self.refs.append(data)
 
 
 _IG_RESERVED = {"p", "reel", "reels", "explore", "stories", "tv", "accounts", "share",
@@ -519,6 +677,8 @@ class SiteLinks:
     facebook: list[str] = field(default_factory=list)
     emails: list[str] = field(default_factory=list)
     phones: list[str] = field(default_factory=list)  # 10 digits
+    platforms: list[str] = field(default_factory=list)  # PLATFORMS names found
+    opening: str | None = None  # opening_signal() of the page text
 
 
 def extract_links(html_text: str) -> SiteLinks:
@@ -549,6 +709,8 @@ def extract_links(html_text: str) -> SiteLinks:
             continue
         if found and found not in target:
             target.append(found)
+    out.platforms = detect_platforms(parser.refs + parser.hrefs)
+    out.opening = opening_signal(" ".join(" ".join(parser.text).split()))
     return out
 
 
@@ -907,6 +1069,15 @@ class Result:
     lookups_failed: list[str] = field(default_factory=list)  # e.g. "instagram failed (HTTP 400)"
     fatal_lookups: set[str] = field(default_factory=set)  # e.g. {"instagram search"}
     searched: bool = False  # a web search for the venue's Instagram was made
+    #: PLATFORMS names on the venue's home page; None when it was not read.
+    platforms: list[str] | None = None
+    opening_soon: bool = False
+    opening_signal: str | None = None  # e.g. "coming soon", "now open"
+    primary_type: str | None = None  # Google's type for a same-name listing
+    types: list[str] | None = None
+    rating_count: int | None = None
+    tier_adjusted: str | None = None  # google_tier: the tier to show, if moved
+    google_says: str | None = None  # e.g. "Google says nightclub"
 
     @property
     def reachable(self) -> bool:
@@ -931,16 +1102,28 @@ def _last_post(profile: dict) -> str | None:
     return stamp[:10] if isinstance(stamp, str) and len(stamp) >= 10 else None
 
 
+def _norm_value(value: str | None) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
 def check_venue(row: dict, places: Places, website: Website | None = None,
                 instagram: Instagram | None = None, today: date | None = None,
-                search=None) -> Result:
+                search=None, bad=None) -> Result:
     """Find and score contact channels for one venue row (leadsheet shape).
     Raises ContactError only when the Places lookup itself fails; a website,
     Instagram or search failure just means less data (noted in
     lookups_failed). `search` (web_search) looks for the venue's Instagram
-    only when the website gave none that is Verified or Likely."""
+    only when the website gave none that is Verified or Likely. `bad` holds
+    contact values the owner marked wrong: they are dropped, never offered.
+
+    Also records the home page's platforms, an opening-soon signal (page
+    text, Instagram bio, search snippet, then Google's status and review
+    count for a same-name listing) and Google's type with google_tier."""
     today = today or datetime.now(timezone.utc).date()
+    bad = {_norm_value(v) for v in (bad or ())}
     result = Result()
+    texts: list[str | None] = []  # opening words, most direct source first
+    same_name = False
     filing = phone_digits((row.get("phone") or "").split(",")[0])
     if filing:
         result.channels.append(Channel(FILING_PHONE, format_phone(filing),
@@ -957,6 +1140,15 @@ def check_venue(row: dict, places: Places, website: Website | None = None,
         base = ["listing_address", "listing_name" if same_name else "listing_other_name"]
         if result.business_status == "CLOSED_PERMANENTLY":
             base.append("listing_closed")
+        if same_name:
+            # Another name may be the old business: its type, reviews and
+            # status say nothing about the new venue.
+            result.primary_type = place.get("primaryType") or None
+            result.types = [t for t in place.get("types") or [] if isinstance(t, str)] or None
+            count = place.get("userRatingCount")
+            result.rating_count = count if isinstance(count, int) else None
+            result.tier_adjusted, result.google_says = google_tier(
+                row.get("priority"), bool(row.get("name_only_a")), result.primary_type)
 
         phone = phone_digits(place.get("nationalPhoneNumber"))
         phone_ch = None
@@ -968,6 +1160,9 @@ def check_venue(row: dict, places: Places, website: Website | None = None,
         site = place.get("websiteUri")
         if site:
             links = website.links(site) if website else None
+            if links is not None:
+                result.platforms = list(links.platforms)
+                texts.append(links.opening)
             result.channels.append(Channel(WEBSITE, domain(site) or site, site,
                                            base + (["website_loads"] if links else [])))
             if links:
@@ -997,10 +1192,12 @@ def check_venue(row: dict, places: Places, website: Website | None = None,
                                 ch.signals.append("ig_links_back")
                             ch.signals += _bio_signals(profile, row, place)
                             ch.last_post = _last_post(profile)
+                            texts.append(opening_signal(profile.get("biography")))
                     result.channels.append(ch)
 
     for ch in result.channels:
         score_channel(ch)
+    result.channels = [ch for ch in result.channels if _norm_value(ch.value) not in bad]
     if search is not None and not any(ch.kind == INSTAGRAM and reachable(ch)
                                       for ch in result.channels):
         query = instagram_query(row)
@@ -1013,7 +1210,13 @@ def check_venue(row: dict, places: Places, website: Website | None = None,
                 if exc.fatal:
                     result.fatal_lookups.add(exc.lookup)
             else:
-                result.channels += instagram_from_search(row, hits)
+                found = [ch for ch in instagram_from_search(row, hits)
+                         if _norm_value(ch.value) not in bad]
+                result.channels += found
+                handles = {ch.value.lstrip("@") for ch in found}
+                texts += [opening_signal(_plain(h.description)) for h in hits
+                          if search_profile_handle(h.url) in handles]
+    _opening(result, texts, same_name)
     picks = outreach(result, today)
     if picks:
         result.method, result.best = picks[0]
@@ -1025,6 +1228,21 @@ def check_venue(row: dict, places: Places, website: Website | None = None,
     if top:
         result.score, result.label, result.reason = top.score, top.label, reason(top)
     return result
+
+
+def _opening(result: Result, texts: list[str | None], same_name: bool) -> None:
+    """Opening soon from the words found (site, Instagram bio, search
+    snippet), then a same-name Google listing that is not open yet or has
+    no reviews. "now open" means just opened (not soon)."""
+    signal = next((t for t in texts if t), None)
+    if signal is None and same_name:
+        status = result.business_status
+        if status and status not in ("OPERATIONAL", "CLOSED_PERMANENTLY"):
+            signal = NOT_OPEN_ON_GOOGLE
+        elif status != "CLOSED_PERMANENTLY" and not result.rating_count:
+            signal = NO_REVIEWS
+    result.opening_signal = signal
+    result.opening_soon = bool(signal) and signal != NOW_OPEN
 
 
 # ---------------------------------------------------------------------------
@@ -1069,7 +1287,7 @@ def next_state(prev: dict | None, is_reachable: bool, now: datetime,
 # ---------------------------------------------------------------------------
 
 _LOAD_SQL = """SELECT venue_key, status, first_checked_at, became_reachable_at,
-                      newly_reachable_on, gave_up_at, next_check_at
+                      newly_reachable_on, gave_up_at, next_check_at, bad_channels
                FROM contact_checks"""
 
 _SAVE_SQL = """
@@ -1078,11 +1296,14 @@ INSERT INTO contact_checks AS c
      confidence_reason, outreach_method, outreach_second, contact_kind,
      contact_value, contact_url, place_id, maps_url, business_status, attempts,
      first_checked_at, last_checked_at, next_check_at, became_reachable_at,
-     newly_reachable_on, gave_up_at)
+     newly_reachable_on, gave_up_at, platforms, opening_soon, opening_signal,
+     google_primary_type, google_types, rating_count, tier_adjusted, google_says)
 VALUES (%(venue_key)s, %(status)s, %(channels)s, %(score)s, %(label)s, %(reason)s,
         %(method)s, %(second)s, %(kind)s, %(value)s, %(url)s, %(place_id)s,
         %(maps_url)s, %(business_status)s, 1, %(first)s, %(now)s, %(next)s,
-        %(became)s, %(newly)s, %(gave_up)s)
+        %(became)s, %(newly)s, %(gave_up)s, %(platforms)s, %(opening_soon)s,
+        %(opening_signal)s, %(primary_type)s, %(types)s, %(rating_count)s,
+        %(tier_adjusted)s, %(google_says)s)
 ON CONFLICT (venue_key) DO UPDATE SET
     status = EXCLUDED.status, channels = EXCLUDED.channels,
     confidence_score = EXCLUDED.confidence_score,
@@ -1097,7 +1318,11 @@ ON CONFLICT (venue_key) DO UPDATE SET
     next_check_at = EXCLUDED.next_check_at,
     became_reachable_at = EXCLUDED.became_reachable_at,
     newly_reachable_on = EXCLUDED.newly_reachable_on,
-    gave_up_at = EXCLUDED.gave_up_at
+    gave_up_at = EXCLUDED.gave_up_at, platforms = EXCLUDED.platforms,
+    opening_soon = EXCLUDED.opening_soon, opening_signal = EXCLUDED.opening_signal,
+    google_primary_type = EXCLUDED.google_primary_type,
+    google_types = EXCLUDED.google_types, rating_count = EXCLUDED.rating_count,
+    tier_adjusted = EXCLUDED.tier_adjusted, google_says = EXCLUDED.google_says
 """
 
 
@@ -1116,7 +1341,13 @@ def save(conn, venue_key: str, result: Result, state: State, now: datetime) -> N
             "maps_url": result.maps_url, "business_status": result.business_status,
             "first": state.first_checked_at, "now": now, "next": state.next_check_at,
             "became": state.became_reachable_at, "newly": state.newly_reachable_on,
-            "gave_up": state.gave_up_at})
+            "gave_up": state.gave_up_at,
+            "platforms": None if result.platforms is None else db.jsonb(result.platforms),
+            "opening_soon": result.opening_soon, "opening_signal": result.opening_signal,
+            "primary_type": result.primary_type,
+            "types": None if result.types is None else db.jsonb(result.types),
+            "rating_count": result.rating_count, "tier_adjusted": result.tier_adjusted,
+            "google_says": result.google_says})
 
 
 def plan(today_rows: list[dict], due_rows: list[dict], backlog_rows: list[dict],
@@ -1178,7 +1409,10 @@ def run(conn, *, places: Places, website: Website | None = None,
         if places is None:
             break
         try:
-            result = check_venue(row, places, website, instagram, today, search=search)
+            bad = [c.get("value") for c in (checked.get(row["venue_key"]) or {}).get(
+                "bad_channels") or [] if isinstance(c, dict)]
+            result = check_venue(row, places, website, instagram, today, search=search,
+                                 bad=bad)
         except ContactError as exc:
             counts["failed"] += 1
             failures[str(exc)] = failures.get(str(exc), 0) + 1

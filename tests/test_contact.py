@@ -371,7 +371,7 @@ def test_places_request_shape_and_error_hides_key():
     assert call["headers"]["X-Goog-FieldMask"] == (
         "places.id,places.displayName,places.formattedAddress,places.addressComponents,"
         "places.nationalPhoneNumber,places.websiteUri,places.googleMapsUri,"
-        "places.businessStatus")
+        "places.businessStatus,places.userRatingCount,places.primaryType,places.types")
     assert call["headers"]["X-Goog-Api-Key"] == "secret-places-key"
 
     places.api.session = FakeSession(FakeResp(403, {"error": {"message": "Zebra"}}))
@@ -977,3 +977,145 @@ def test_cli_enrich_logs_instagram_search_on_off(monkeypatch, caplog):
     assert "secret-brave-key" not in caplog.text
     import logging
     assert logging.getLogger("urllib3").level > logging.CRITICAL  # never logs the query URL
+
+
+# --- current platform, opening soon, Google's venue type (no extra calls) ---
+
+PLATFORM_PAGE = """<html><head><title>Zebra Fake Lounge</title>
+<meta name="description" content="Cocktails, DJs and tables.">
+<script src="https://www.sevenrooms.com/widget/embed.js"></script>
+<script>window.TockWidget = {src: "https://www.exploretock.com/zebrafake"};</script>
+</head><body>
+<iframe src="https://www.opentable.com/widget/reservation/loader?rid=1"></iframe>
+<a href="https://zebrafake.square.site/">Gift cards</a>
+<a href="https://notdice.fm.example.test/">not DICE</a>
+<a href="https://www.instagram.com/zebrafakelounge/">IG</a>
+<style>.coming-soon { color: red }</style>
+<p>Cocktails and DJs downtown.</p>
+</body></html>"""
+
+
+def test_platforms_come_from_links_scripts_and_iframes():
+    links = contact.extract_links(PLATFORM_PAGE)
+    assert links.platforms == ["SevenRooms", "Tock", "OpenTable", "Square"]
+    assert links.opening is None  # a CSS class name is not page text
+    assert links.instagram == ["zebrafakelounge"]
+    spk = contact.extract_links('<a href="https://www.speakeasygo.com/e/zebra">Tickets</a>'
+                                '<a href="https://dice.fm/venue/zebra">DICE</a>'
+                                '<a href="https://www.yelp.com/reservations/zebra">Book</a>')
+    assert spk.platforms == ["DICE", "Yelp Reservations", contact.SPEAKEASY]
+    assert contact.extract_links("<p>Book with us</p>").platforms == []
+
+
+@pytest.mark.parametrize("text, signal", [
+    ("Zebra Fake Lounge. Coming soon to 6th Street!", "coming soon"),
+    ("OPENING SOON", "opening soon"),
+    ("Join us for our grand opening party", "grand opening"),
+    ("Soft open this weekend", "soft opening"),
+    ("Soft-opening Friday", "soft opening"),
+    ("We are opening in October", "opening in October"),
+    ("Opening November 12", "opening in November"),
+    ("Now open! Coming soon: brunch", "now open"),
+    ("Our opening may be delayed", None),
+    ("Opening hours 5pm to 2am", None),
+    ("", None),
+])
+def test_opening_signal_words(text, signal):
+    assert contact.opening_signal(text) == signal
+
+
+def typed_place(**kw):
+    rating = kw.pop("rating", 120)
+    primary = kw.pop("primary", "bar")
+    out = place(**kw)
+    out["primaryType"] = primary
+    out["types"] = [primary, "establishment"]
+    if rating is not None:
+        out["userRatingCount"] = rating
+    return out
+
+
+def test_check_venue_stores_platform_types_and_opening_signal():
+    links = site_links(platforms=["SevenRooms"], opening="coming soon")
+    result = contact.check_venue(venue(), FakePlaces([typed_place(primary="night_club")]),
+                                 FakeWebsite(links), None, TODAY)
+    assert result.platforms == ["SevenRooms"]
+    assert (result.opening_soon, result.opening_signal) == (True, "coming soon")
+    assert (result.primary_type, result.types, result.rating_count) == (
+        "night_club", ["night_club", "establishment"], 120)
+    # Website text says now open: just opened, not opening soon.
+    now_open = contact.check_venue(venue(), FakePlaces([typed_place(rating=0)]),
+                                   FakeWebsite(site_links(opening="now open")), None, TODAY)
+    assert (now_open.opening_soon, now_open.opening_signal) == (False, "now open")
+    # No website read: the platform is unknown (None), not "none found".
+    no_site = contact.check_venue(venue(), FakePlaces([typed_place(website=None)]),
+                                  FakeWebsite(None), None, TODAY)
+    assert no_site.platforms is None
+
+
+def test_google_listing_signals_for_opening_soon():
+    def run(**kw):
+        return contact.check_venue(venue(), FakePlaces([typed_place(**kw)]),
+                                   FakeWebsite(site_links()), None, TODAY)
+
+    zero = run(rating=0)
+    assert (zero.opening_soon, zero.opening_signal) == (True, "no Google reviews yet")
+    missing = run(rating=None)
+    assert missing.opening_signal == "no Google reviews yet"
+    assert run(status="CLOSED_TEMPORARILY").opening_signal == "Google says not open yet"
+    assert run(status="FUTURE_OPENING").opening_signal == "Google says not open yet"
+    assert run(status="CLOSED_PERMANENTLY").opening_soon is False
+    assert run().opening_soon is False and run().opening_signal is None
+    # A listing under another name may be the old business: its reviews and
+    # status say nothing about the new one.
+    other = run(name="Okapi Old Diner", rating=0)
+    assert other.opening_soon is False and other.primary_type is None
+
+
+def test_instagram_search_snippet_can_say_opening_soon():
+    hits = [hit("zebrafakelounge", "Zebra Fake Lounge (@zebrafakelounge)",
+                "Opening soon in Austin. 100 Fake St")]
+    result = contact.check_venue(venue(), FakePlaces([typed_place(website=None)]),
+                                 FakeWebsite(None), None, TODAY, search=FakeSearch(hits))
+    assert (result.opening_soon, result.opening_signal) == (True, "opening soon")
+
+
+@pytest.mark.parametrize("priority, name_only, primary, want", [
+    ("B", False, "night_club", ("A", "Google says nightclub")),
+    ("C", False, "comedy_club", ("A", "Google says comedy club")),
+    ("B", False, "karaoke", (None, None)),  # karaoke is a B venue
+    ("A", True, "mexican_restaurant", ("B", "Google says restaurant")),
+    ("A", True, "restaurant", ("B", "Google says restaurant")),
+    ("A", True, "cafe", ("B", "Google says cafe")),
+    ("A", False, "restaurant", (None, None)),  # A by license or ticketed word
+    ("A", True, "night_club", (None, None)),
+    ("B", False, "restaurant", (None, None)),
+    ("B", False, None, (None, None)),
+])
+def test_google_tier_adjustment(priority, name_only, primary, want):
+    assert contact.google_tier(priority, name_only, primary) == want
+
+
+def test_check_venue_adjusts_tier_only_from_a_same_name_listing():
+    row = venue(priority="A", name_only_a=True)
+    down = contact.check_venue(row, FakePlaces([typed_place(primary="restaurant")]),
+                               FakeWebsite(site_links()), None, TODAY)
+    assert (down.tier_adjusted, down.google_says) == ("B", "Google says restaurant")
+    other = contact.check_venue(row, FakePlaces([typed_place(name="Okapi Old Grill",
+                                                             primary="restaurant")]),
+                                FakeWebsite(site_links()), None, TODAY)
+    assert other.tier_adjusted is None
+
+
+def test_bad_channel_is_never_used_again():
+    ig = FakeInstagram({"zebrafakelounge": profile()})
+    result = contact.check_venue(venue(), FakePlaces([place()]), FakeWebsite(site_links()),
+                                 ig, TODAY, bad={"@zebrafakelounge"})
+    assert "instagram" not in by_kind(result)
+    assert result.method == "Call" and result.best.value == "(512) 555-0142"
+    # The web search may find the same handle again: still left out.
+    hits = [hit("zebrafakelounge", "Zebra Fake Lounge (@zebrafakelounge)", "Austin")]
+    result = contact.check_venue(venue(), FakePlaces([place(phone=None, website=None)]),
+                                 FakeWebsite(None), None, TODAY, search=FakeSearch(hits),
+                                 bad={"@zebrafakelounge"})
+    assert not result.reachable and result.method == contact.WAIT_METHOD

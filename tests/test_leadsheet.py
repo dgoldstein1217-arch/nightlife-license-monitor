@@ -483,3 +483,74 @@ def test_owner_who_is_a_person_fills_contact_person():
         3, source="ny_sla_pending", dba=None, legal_name="QUOKKA FAKE INC",
         raw={"legalname": "QUOKKA FAKE INC"})])
     assert row["contact_person"] is None
+
+
+# --- Google's venue type moves the tier everywhere (contact.google_tier) ---
+
+def test_name_only_a_is_a_club_or_lounge_name_without_other_signals():
+    def only(**kw):
+        [row] = leadsheet.group_records([rec(1, tier="A", **kw)])
+        return row["name_only_a"]
+
+    assert only(dba="ZEBRA FAKE LOUNGE") is True
+    assert only(dba="ZEBRA FAKE COMEDY LOUNGE") is False  # ticketed-venue word
+    assert only(dba="ZEBRA FAKE LOUNGE", license_type="LH") is False  # late hours license
+    assert only(dba="ZEBRA FAKE LOUNGE", license_description="Cabaret") is False
+    [b] = leadsheet.group_records([rec(1, tier="B", dba="ZEBRA FAKE LOUNGE")])
+    assert b["name_only_a"] is False  # only A venues can be moved down
+
+
+def test_tier_adjustment_shows_on_sheet_and_decides_attio():
+    from licmon import attio
+
+    by_key = {r["venue_key"]: r for r in leadsheet.group_records([
+        rec(1, venue_key="down", tier="A", lead_score=55, hot=True, dba="ZEBRA FAKE LOUNGE"),
+        rec(2, venue_key="up", tier="B", lead_score=45, dba="QUOKKA FAKE TAVERN"),
+        rec(3, venue_key="same", tier="B", lead_score=62, dba="OKAPI FAKE PUB"),
+    ])}
+    down, up, same = by_key["down"], by_key["up"], by_key["same"]
+    assert attio.eligible(down, 60) and not attio.eligible(up, 60)
+    leadsheet.apply_contact(down, check("reachable", tier_adjusted="B",
+                                        google_says="Google says restaurant",
+                                        google_primary_type="mexican_restaurant"), DAY)
+    leadsheet.apply_contact(up, check("reachable", tier_adjusted="A",
+                                      google_says="Google says nightclub",
+                                      google_primary_type="night_club"), DAY)
+    leadsheet.apply_contact(same, check("reachable", google_primary_type="pub"), DAY)
+    assert (down["priority"], down["priority_filed"], down["hot"]) == ("B", "A", "")
+    assert down["business_type"] == "Bar / event venue"
+    assert down["google_says"] == "Google says restaurant. Shown as B, filed as A"
+    assert (up["priority"], up["priority_filed"]) == ("A", "B")
+    assert up["google_says"] == "Google says nightclub. Shown as A, filed as B"
+    assert (same["priority"], same["google_says"]) == ("B", "Pub")
+    assert "priority_filed" not in same
+    # Restaurants stop going to Attio as clubs; Google's nightclubs go.
+    assert not attio.eligible(down, 60) and attio.eligible(up, 60)
+    assert [r["venue_key"] for r in attio.candidates([down, up, same])] == ["same", "up"]
+    assert attio.entry_values(up)["priority"] == "A"
+    # Applying twice changes nothing more.
+    leadsheet.apply_contact(down, check("reachable", tier_adjusted="B",
+                                        google_says="Google says restaurant"), DAY)
+    assert (down["priority"], down["priority_filed"]) == ("B", "A")
+
+
+def test_platform_and_opening_columns_on_lead_tabs():
+    rows = checked_rows()
+    by_key = {r["venue_key"]: r for r in rows}
+    leadsheet.apply_contact(by_key["reach"], check(
+        "reachable", platforms=["SevenRooms", "Toast"], opening_soon=True,
+        opening_signal="coming soon"), DAY)
+    leadsheet.apply_contact(by_key["newly"], check(
+        "reachable", newly_reachable_on=DAY, platforms=[], opening_signal="now open",
+        opening_soon=False), DAY)
+    wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows)))
+    headers, cells = _table(wb["New"])
+    for header in ("Current platform", "Opening soon", "Google says", "Speakeasy / Attio"):
+        assert header in headers
+    got = {c["Business name"].value: (c["Current platform"].value, c["Opening soon"].value)
+           for c in cells}
+    assert got["Zebra Fake Lounge"] == ("SevenRooms, Toast", "Yes: coming soon")
+    assert got["Fake Taproom"] == ("None found on their site", "Now open")
+    speakeasy = leadsheet.apply_contact(dict(rows[0]), check(
+        "reachable", platforms=["Speakeasy"]), DAY)
+    assert speakeasy["on_speakeasy"] and speakeasy["pipeline"] == "Already on Speakeasy"
