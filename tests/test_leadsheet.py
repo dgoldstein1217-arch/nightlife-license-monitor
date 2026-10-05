@@ -437,3 +437,49 @@ def test_possible_instagram_is_empty_without_search_finds():
     wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows)))
     [quokka] = _table(wb["Waiting on contact"], header_row=2)[1]
     assert quokka["Possible Instagram"].value is None
+
+
+# --- owner names the filings publish (Source.contact "people") ---
+
+def test_owner_names_from_five_more_sources():
+    from licmon.sources.chicago_bacp import ChicagoBacpSource
+    from licmon.sources.chicago_pending import ChicagoPendingSource
+    from licmon.sources.ny_sla import NySlaSource
+    from licmon.sources.tx_tabc import TxTabcSource
+
+    assert TxTabcSource().contact({"owner": "JANE Q TESTER"}) == {"people": "JANE Q TESTER"}
+    assert TxTabcSource().contact({"owner": "  "}) == {}
+    assert CaAbcSource().contact({"rows": [{"Primary Name": "TESTER, JANE"},
+                                           {"Primary Name": "TESTER, JANE"},
+                                           {"Primary Name": "ZEBRA FAKE LLC"}]}) == {
+        "people": "TESTER, JANE; ZEBRA FAKE LLC"}
+    fl = FlAbtSource().contact({"Owner Name": "JOHN TESTER", "Mail Address 1": "9 TEST WAY",
+                                "Mail City": "MIAMI", "Mail State": "FL", "Mail ZIP": "33101"})
+    assert fl == {"people": "JOHN TESTER", "mailing_address": "9 TEST WAY, MIAMI, FL 33101"}
+    assert NySlaSource().contact({"legalname": "QUOKKA FAKE INC"}) == {
+        "people": "QUOKKA FAKE INC"}
+    assert ChicagoBacpSource().contact({"legal_name": "JANE TESTER"}) == {
+        "people": "JANE TESTER"}
+    pending = ChicagoPendingSource()
+    # The list only carries the popup link's label, never names: nothing.
+    assert pending.contact({"Ownership": "Owners/Officers"}) == {}
+    assert pending.contact({"Ownership": None}) == {}
+    assert pending.contact({"Ownership": "JANE TESTER; JOHN TESTER"}) == {
+        "people": "JANE TESTER; JOHN TESTER"}
+
+
+def test_owner_who_is_a_person_fills_contact_person():
+    [row] = leadsheet.group_records([rec(
+        1, dba="ZEBRA FAKE LOUNGE", legal_name="JANE Q TESTER",
+        raw={"owner": "JANE Q TESTER"})])
+    assert row["people"] == "Jane Q Tester"
+    assert row["contact_person"] == "Jane Q Tester"
+    # A company owner, or a name that is just the business again, stays out.
+    [row] = leadsheet.group_records([rec(
+        2, dba="ZEBRA FAKE LOUNGE", legal_name="ZEBRA FAKE LLC",
+        raw={"owner": "ZEBRA FAKE LLC"})])
+    assert row["people"] is None and row["contact_person"] is None
+    [row] = leadsheet.group_records([rec(
+        3, source="ny_sla_pending", dba=None, legal_name="QUOKKA FAKE INC",
+        raw={"legalname": "QUOKKA FAKE INC"})])
+    assert row["contact_person"] is None

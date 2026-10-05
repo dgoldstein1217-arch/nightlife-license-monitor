@@ -113,6 +113,10 @@ class ChicagoBacpSource(Source):
                           for r in lookup})
         return {**out, **found}
 
+    def contact(self, raw: dict) -> dict:
+        """The licensee's legal name (a person for a sole proprietor)."""
+        return self.people(raw.get("legal_name"))
+
     def fetch(self, http: Http) -> list[Snapshot]:
         since = ((self.today or date.today()) - timedelta(days=WINDOW_DAYS)).isoformat()
         codes = ",".join(f"'{c}'" for c in sorted(LICENSE_CODES))

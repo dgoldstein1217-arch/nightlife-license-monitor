@@ -37,6 +37,19 @@ class Source(ABC):
         applicant names), "mailing_address". Never looked up elsewhere."""
         return {}
 
+    @staticmethod
+    def people(*names) -> dict:
+        """{"people": "A; B"} from the owner or applicant names a filing
+        publishes (blank and repeated names dropped), or {}. The sheet keeps
+        natural persons only (leadsheet._contact_person); companies and the
+        business's own name are left out there."""
+        out: list[str] = []
+        for name in names:
+            name = " ".join(str(name or "").split())
+            if name and name not in out:
+                out.append(name)
+        return {"people": "; ".join(out)} if out else {}
+
     # --- Lead score inputs (see qualify.py for the shared points table) ---
     # Both read only the normalized Record fields, never rec.raw:
     # `licmon requalify` rebuilds records without their raw rows.

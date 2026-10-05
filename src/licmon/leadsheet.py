@@ -250,8 +250,13 @@ def _title(text: str | None) -> str:
 
 
 def _people(contacts: list[dict], names: tuple) -> str | None:
-    """Owner/applicant names, minus entries that just repeat the business."""
-    skip = {re.sub(r"\W", "", (n or "").upper()) for n in names if n}
+    """Owner/applicant names, minus entries that just repeat the business:
+    the trade name (DBA), and the legal name when it is a company. A legal
+    name that is a person (a sole proprietor) stays: Texas, New York,
+    Chicago, California and Florida publish only the legal owner."""
+    dba, legal = (tuple(names) + (None, None))[:2]
+    skip = {re.sub(r"\W", "", n.upper()) for n in (dba, legal)
+            if n and (n is dba and n != legal or _is_company(n))}
     people = []
     for c in contacts:
         for p in (c.get("people") or "").split(";"):
@@ -474,7 +479,7 @@ def group_records(records: list[dict]) -> list[dict]:
         web_q = " ".join(p for p in (name, top.get("city"), top.get("state")) if p)
         seen = [r["first_seen_at"] for r in recs if r.get("first_seen_at")]
         since = [r["prior_since"] for r in recs if r.get("prior_since")]
-        people = _people(contacts, (name, top.get("legal_name")))
+        people = _people(contacts, (top.get("dba") or None, top.get("legal_name")))
         person = _contact_person(people)
         rows.append({
             "queue_date": queue_date,

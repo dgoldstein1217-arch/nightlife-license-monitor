@@ -76,6 +76,8 @@ _WS_RE = re.compile(r"\s+")
 _OWNERSHIP_RE = re.compile(
     r"showOwnership\(\s*(\d+)\s*,\s*(\d+)\s*\)", re.I
 )
+#: The Ownership cell's link label, not a name.
+_OWNERSHIP_LABEL = re.compile(r"(owners?\s*/?\s*(officers?)?|ownership|officers?)", re.I)
 _DATA_ORDER_RE = re.compile(r"data-order\s*=\s*['\"]([^'\"]+)['\"]", re.I)
 _ZIP_RE = re.compile(r"\b(\d{5})(?:\s*-\s*(\d{4}))?\b")
 _SPLIT_TYPES_RE = re.compile(r"[;/|]")
@@ -210,6 +212,15 @@ class ChicagoPendingSource(Source):
 
         return chicago_history(http, records, today or date.today(), owner_ids={
             r.source_record_id: account_of(r.source_record_id) for r in records})
+
+    def contact(self, raw: dict) -> dict:
+        """Names in the Ownership cell. The list shows only the
+        Owners/Officers popup link there (its label is no name), and the
+        popup is never fetched, so this is usually empty."""
+        text = " ".join(str(raw.get("Ownership") or "").split())
+        if not text or _OWNERSHIP_LABEL.fullmatch(text):
+            return {}
+        return self.people(*text.split(";"))
 
     def fetch(self, http: Http) -> list[Snapshot]:
         # The two list pages only; no per-row detail requests.

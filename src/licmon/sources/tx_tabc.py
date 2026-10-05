@@ -100,6 +100,10 @@ class TxTabcSource(Source):
     def nightlife_license(self, rec: Record) -> tuple[str, ...]:
         return ("late_hours",) if (rec.license_type or "").upper() == "LH" else ()
 
+    def contact(self, raw: dict) -> dict:
+        """The filing's owner (a person for a sole proprietor)."""
+        return self.people(raw.get("owner"))
+
     def fetch(self, http: Http) -> list[Snapshot]:
         return socrata.fetch_all(http, DOMAIN, DATASET, order="applicationid")
 

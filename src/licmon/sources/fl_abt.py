@@ -389,14 +389,15 @@ class FlAbtSource(Source):
         return tuple(found)
 
     def contact(self, raw: dict) -> dict:
+        out = self.people(_clean(raw.get("Owner Name")))
         parts = [_clean(raw.get(f"Mail Address {i}")) for i in (1, 2, 3)]
         street = " ".join(p for p in parts if p)
         if not street:
-            return {}
+            return out
         city, state, zip_code = (_clean(raw.get(k)) for k in
                                  ("Mail City", "Mail State", "Mail ZIP"))
         tail = " ".join(p for p in (state, zip_code) if p)
-        return {"mailing_address": ", ".join(p for p in (street, city, tail) if p)}
+        return {**out, "mailing_address": ", ".join(p for p in (street, city, tail) if p)}
 
     def fetch(self, http: Http) -> list[Snapshot]:
         return [http.get(EXPORT_URL)]

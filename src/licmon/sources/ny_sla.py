@@ -134,6 +134,10 @@ class NySlaSource(Source):
         text = (rec.license_description or "").upper()
         return tuple(key for pattern, key in _NIGHTLIFE_DESCRIPTIONS if pattern.search(text))
 
+    def contact(self, raw: dict) -> dict:
+        """The applicant's legal name (a person for a sole proprietor)."""
+        return self.people(raw.get("legalname"))
+
     def fetch(self, http: Http) -> list[Snapshot]:
         return socrata.fetch_all(http, DOMAIN, DATASET, order="application_id")
 
