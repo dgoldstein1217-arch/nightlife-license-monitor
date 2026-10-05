@@ -133,6 +133,21 @@ def _source_summary(sources: list[dict]) -> str:
             "The others ran normally. Ask Claude Code to check it.")
 
 
+def _contact_lines(leads: list[dict], open_leads: list[dict]) -> list[str]:
+    """Counts from the contact lookup, once it has run (else nothing, so the
+    email reads as before). Counts only, never a contact."""
+    from . import leadsheet
+
+    if not leadsheet.contact_checked(leads + open_leads):
+        return []
+    reachable = sum(1 for lead in leads if lead.get("contact_status") == "reachable")
+    newly = sum(1 for lead in leads if lead.get("newly_reachable"))
+    waiting = len(leadsheet.waiting_rows(leads, open_leads))
+    return [f"Reachable today (verified contact): {reachable}",
+            f"Newly reachable (contact found on a recheck): {newly}",
+            f"Waiting on contact: {waiting}, on the {leadsheet.WAITING_TAB} tab."]
+
+
 # ---------------------------------------------------------------------------
 # Compose
 # ---------------------------------------------------------------------------
@@ -153,6 +168,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     count_existing = sum(1 for lead in leads if leadsheet.is_existing(lead))
     existing_line = (f"Existing venues (new owner or adding a permit): {count_existing}, "
                      "on the Existing venues tab." if count_existing else None)
+    contact_lines = _contact_lines(leads, list(data.get("open_leads") or []))
     failed = sum(1 for s in sources if s.get("status") == "failed")
 
     if total == 0:
@@ -180,6 +196,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
             f"Bars and event venues (B): {count_b}",
             f"Restaurants (C): {count_c}",
             *([existing_line] if existing_line else []),
+            *contact_lines,
             "",
             f"By market: {market_text}",
             "",
@@ -201,7 +218,8 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
                  f"{e(f'Nightclubs, lounges and ticketed venues (A): {count_a}')}<br>"
                  f"{e(f'Bars and event venues (B): {count_b}')}<br>"
                  f"{e(f'Restaurants (C): {count_c}')}"
-                 + (f"<br>{e(existing_line)}" if existing_line else "") + "</p>")
+                 + (f"<br>{e(existing_line)}" if existing_line else "")
+                 + "".join(f"<br>{e(line)}" for line in contact_lines) + "</p>")
         h.append(f"<p>{e(f'By market: {market_text}')}</p>")
     h.append(f"<p>{e(source_line)}</p>")
     h.append(f"<p>{e(FOOTER)}</p>")

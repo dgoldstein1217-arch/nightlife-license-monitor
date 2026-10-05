@@ -455,3 +455,24 @@ def test_cli_email_preview_refuses_repo_folder(monkeypatch):
     repo = Path(cli.__file__).resolve().parents[2]
     with pytest.raises(SystemExit):
         cli.main(["email", "--preview", str(repo / "exports" / "x")])
+
+
+def test_contact_counts_only_once_the_lookup_has_run(fake_xlsx):
+    data = sample_data()
+    plain, _ = bodies(notify.compose(data, DAY, sender="s", recipients=["o"]))
+    assert "Waiting on contact" not in plain and "reachable" not in plain.lower()
+
+    leads = data["leads"]
+    leads[0].update(contact_status="reachable", newly_reachable="Newly reachable",
+                    venue_key="k1", contact_url="tel:+15125550142")
+    leads[1].update(contact_status="reachable", venue_key="k2")
+    leads[2].update(contact_status="waiting", venue_key="k3")
+    open_leads = [dict(leads[2]), make_row(9, venue_key="k9", contact_status="gave_up")]
+    data["open_leads"] = open_leads
+    plain, html_body = bodies(notify.compose(data, DAY, sender="s", recipients=["o"]))
+    assert "Reachable today (verified contact): 2" in plain
+    assert "Newly reachable (contact found on a recheck): 1" in plain
+    assert "Waiting on contact: 2, on the Waiting on contact tab." in plain
+    assert "Waiting on contact: 2" in html_body
+    for body in (plain, html_body):
+        assert "555" not in body and "ZEBRA" not in body.upper()

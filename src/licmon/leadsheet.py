@@ -1,14 +1,19 @@
 """The owner's lead spreadsheet: one clean row per venue, outreach first.
 
-Built from the review queue plus contact details the official records
-themselves publish (see Source.contact). No automatic outside lookups: the
-Map, Google and Instagram columns are plain search links the owner clicks by
-hand to find a phone number, website or social account.
+Built from the review queue, the contact details the official records
+themselves publish (see Source.contact), and the contact lookup's results
+(contact.py, table contact_checks) when it has run. People are never looked
+up: the Contact person columns are the filing's own named person plus plain
+search links the owner clicks by hand.
 
 The workbook (build_workbook) has a New tab (new venues and unknown
 history), an Existing venues tab (new owner or adding a permit), an All open
 tab, one tab per state that has open leads, and a How scoring works tab.
-Every tab sorts by lead score, highest first.
+Once the contact lookup has run, eligible venues with no verified contact
+move from those tabs to a Waiting on contact tab, and the lead tabs gain
+Best way to reach, Contact, Confidence and Why we trust it. Until it has
+run, the workbook is laid out as before. Every tab sorts by lead score,
+highest first (newly reachable venues first).
 
 Local and email use only. Never print rows in GitHub Actions (public logs).
 """
@@ -41,6 +46,10 @@ COLUMNS: list[tuple[str, str, int]] = [
     ("filed_on", "Filed on", 12),
     ("phone", "Phone", 16),
     ("people", "Owner / applicant names", 34),
+    ("contact_person", "Contact person", 24),
+    ("person_linkedin_url", "Person on LinkedIn", 12),
+    ("person_instagram_url", "Person on Instagram", 12),
+    ("person_facebook_url", "Person on Facebook", 12),
     ("address", "Address", 34),
     ("city", "City", 18),
     ("state", "State", 7),
@@ -248,6 +257,35 @@ def _people(contacts: list[dict], names: tuple) -> str | None:
     return "; ".join(people) or None
 
 
+def _is_company(name: str) -> bool:
+    words = set(re.sub(r"[^A-Z0-9]+", " ", name.upper()).split())
+    return bool(words & history_mod._ENTITY_WORDS)
+
+
+def _contact_person(people: str | None) -> str | None:
+    """The first named person on the filing (not a company). Only what the
+    filing says: people are never looked up."""
+    for name in (people or "").split(";"):
+        name = name.strip()
+        if name and not _is_company(name):
+            return name
+    return None
+
+
+def _person_links(person: str | None, city: str | None) -> dict:
+    """Plain Google searches the owner opens by hand. Nothing is fetched."""
+    if not person:
+        return {"person_linkedin_url": None, "person_instagram_url": None,
+                "person_facebook_url": None}
+    where = f' "{city}"' if city else ""
+    google = "https://www.google.com/search?q="
+    return {
+        "person_linkedin_url": _search(google, f'site:linkedin.com/in "{person}"{where}'),
+        "person_instagram_url": _search(google, f'site:instagram.com "{person}"'),
+        "person_facebook_url": _search(google, f'site:facebook.com "{person}"{where}'),
+    }
+
+
 def _uniq(values) -> list[str]:
     out: list[str] = []
     for v in values:
@@ -420,6 +458,8 @@ def group_records(records: list[dict]) -> list[dict]:
         web_q = " ".join(p for p in (name, top.get("city"), top.get("state")) if p)
         seen = [r["first_seen_at"] for r in recs if r.get("first_seen_at")]
         since = [r["prior_since"] for r in recs if r.get("prior_since")]
+        people = _people(contacts, (name, top.get("legal_name")))
+        person = _contact_person(people)
         rows.append({
             "queue_date": queue_date,
             "venue_key": top.get("venue_key"),
@@ -443,7 +483,9 @@ def group_records(records: list[dict]) -> list[dict]:
             "stage": _stage(recs, by_source),
             "filed_on": min(dates) if dates else None,
             "phone": ", ".join(_uniq(_phone(c.get("phone")) for c in contacts)) or None,
-            "people": _people(contacts, (name, top.get("legal_name"))),
+            "people": people,
+            "contact_person": person,
+            **_person_links(person, _title(top.get("city"))),
             "address": _title(top.get("address")),
             "city": _title(top.get("city")),
             "state": (top.get("state") or "").upper(),
@@ -509,24 +551,89 @@ def is_existing(row: dict) -> bool:
     return row.get("venue_history") in history_mod.EXISTING
 
 
+WAITING_NOTE = ("No verified contact yet. Each venue is checked again every week and "
+                "moves back to the lead tabs, marked Newly reachable, once we find a way "
+                "to reach it. After 120 days it says Gave up. The search links help a "
+                "manual lookup.")
+
+
+def contact_checked(rows: list[dict]) -> bool:
+    """Has the contact lookup looked at any of these venues?"""
+    return any(r.get("contact_status") for r in rows)
+
+
+def is_waiting(row: dict) -> bool:
+    """Checked, and no verified contact (waiting or gave up)."""
+    return row.get("contact_status") in ("waiting", "gave_up")
+
+
+def lead_tab_view(row: dict) -> dict:
+    """A checked venue on a lead tab: verified links in place of the search
+    links (those stay on the Waiting tab, where they help a manual lookup).
+    Venues the lookup never checked keep their search links."""
+    if not row.get("contact_status"):
+        return row
+    out = dict(row)
+    out["google_url"] = row.get("verified_website_url")
+    out["google_url_text"] = "Website"
+    out["instagram_url"] = row.get("verified_instagram_url")
+    out["instagram_url_text"] = "Profile"
+    out["facebook_url"] = row.get("verified_facebook_url")
+    out["facebook_url_text"] = "Page"
+    return out
+
+
+def waiting_rows(*groups: list[dict]) -> list[dict]:
+    """Waiting and gave-up venues from all the given rows, once each (latest
+    queue day), waiting before gave up, then by score."""
+    latest: dict[str, dict] = {}
+    for rows in groups:
+        for row in rows:
+            if not is_waiting(row):
+                continue
+            key = row.get("venue_key")
+            have = latest.get(key)
+            if have is None or (row.get("queue_date") or date.min) > (have.get("queue_date")
+                                                                        or date.min):
+                latest[key] = row
+    return sorted(latest.values(),
+                  key=lambda r: (r.get("contact_status") == "gave_up",) + sort_key(r))
+
+
 def build_workbook(new_rows: list[dict], open_rows: list[dict] | None = None) -> bytes:
     """The owner's workbook: New (new venues and unknown history), Existing
     venues (new owner or adding a permit), All open, one tab per state with
-    open leads (from the data, not a fixed list), then How scoring works."""
+    open leads (from the data, not a fixed list), then How scoring works.
+
+    Once the contact lookup has run (any row checked), venues it checked
+    without finding verified contact leave those tabs for a Waiting on
+    contact tab after Existing venues, and the lead tabs gain the contact
+    columns. Venues it never checked stay where they were."""
     from openpyxl import Workbook
 
     open_rows = sorted(open_rows or [], key=sort_key)
     new_rows = sorted(new_rows, key=sort_key)
+    checked = contact_checked(new_rows) or contact_checked(open_rows)
+    columns, open_columns = COLUMNS, OPEN_COLUMNS
+    waiting: list[dict] = []
+    if checked:
+        columns, open_columns = with_contact_columns(COLUMNS), with_contact_columns(OPEN_COLUMNS)
+        waiting = waiting_rows(new_rows, open_rows)
+        new_rows = [lead_tab_view(r) for r in new_rows if not is_waiting(r)]
+        open_rows = [lead_tab_view(r) for r in open_rows if not is_waiting(r)]
     wb = Workbook()
-    _write_sheet(wb.active, [r for r in new_rows if not is_existing(r)], COLUMNS, "New")
-    _write_sheet(wb.create_sheet(), [r for r in new_rows if is_existing(r)], COLUMNS,
+    _write_sheet(wb.active, [r for r in new_rows if not is_existing(r)], columns, "New")
+    _write_sheet(wb.create_sheet(), [r for r in new_rows if is_existing(r)], columns,
                  "Existing venues", note=EXISTING_NOTE)
-    _write_sheet(wb.create_sheet(), open_rows, OPEN_COLUMNS, "All open")
+    if checked:
+        _write_sheet(wb.create_sheet(), waiting, WAITING_COLUMNS, WAITING_TAB,
+                     note=WAITING_NOTE)
+    _write_sheet(wb.create_sheet(), open_rows, open_columns, "All open")
     for state in sorted({r.get("state") or "Other" for r in open_rows}):
         _write_sheet(wb.create_sheet(),
                      [r for r in open_rows if (r.get("state") or "Other") == state],
-                     OPEN_COLUMNS, state)
-    _write_legend(wb.create_sheet())
+                     open_columns, state)
+    _write_legend(wb.create_sheet(), contact=checked)
     return _save(wb)
 
 
@@ -560,16 +667,22 @@ def _write_sheet(ws, rows: list[dict], columns: list[tuple[str, str, int]],
              "C": PatternFill("solid", fgColor="F3F4F6")}
     hot_fill = PatternFill("solid", fgColor="FEE2E2")
     link_font = Font(color="1D4ED8", underline="single")
+    # A row may carry "<key>_text" to show instead of the default word.
     link_cols = {"map_url": "Map", "google_url": "Search", "instagram_url": "Search",
-                 "record_url": "Record"}
+                 "record_url": "Record", "facebook_url": "Page", "contact_url": "Open",
+                 "person_linkedin_url": "Search", "person_instagram_url": "Search",
+                 "person_facebook_url": "Search"}
     keys = [key for key, _, _ in columns]
     for i, row in enumerate(rows, start=top + 1):
         for j, key in enumerate(keys, start=1):
             value = _cell(row.get(key))
             cell = ws.cell(row=i, column=j)
             if key in link_cols:
-                if isinstance(value, str) and value.startswith(("http://", "https://")):
-                    cell.value = link_cols[key]
+                if isinstance(value, str) and value.startswith(("http://", "https://",
+                                                                "mailto:", "tel:")):
+                    cell.value = str(row.get(key + "_text") or link_cols[key])
+                    if cell.data_type == "f":
+                        cell.data_type = "s"  # a website's text is never a formula
                     cell.hyperlink = value
                     cell.font = link_font
                 continue
@@ -594,9 +707,54 @@ def _write_sheet(ws, rows: list[dict], columns: list[tuple[str, str, int]],
                           f"{max(top, len(rows) + top)}")
 
 
-def legend_lines() -> list[tuple[str, str]]:
+def contact_legend_lines() -> list[tuple[str, str]]:
+    """The contact part of How scoring works, from contact.py's own tables."""
+    from . import contact as c
+
+    pts = c.POINTS
+    lines = [
+        ("", ""),
+        ("Contact confidence", "Points"),
+        ("Google listing at the same address as the filing", pts["listing_address"]),
+        ("The listing's name matches the venue name", f"{pts['listing_name']}. Without it, "
+         "anything from that listing stays Unverified (it may be the old business)."),
+        ("Phone: Google says the place is open", pts["listing_open"]),
+        ("Phone: the venue website shows the same number", pts["phone_on_website"]),
+        ("Website: the site loads", pts["website_loads"]),
+        ("Email or Instagram linked from the venue website", pts["linked_from_website"]),
+        ("Facebook page linked from the venue website",
+         f"{pts['facebook_linked']}. Facebook cannot be checked further, so at most Likely."),
+        ("Instagram links back to the same website", pts["ig_links_back"]),
+        ("Instagram bio names the street address or ZIP", pts["ig_bio_address"]),
+        ("Instagram bio names the city or neighborhood", pts["ig_bio_city"]),
+        ("Instagram the API cannot read (personal account)", pts["ig_unreadable"]),
+        ("Phone from the license filing", f"{pts['filing_phone']}. Often a lawyer or "
+         "expediter, so it never makes a venue reachable on its own."),
+        ("Confidence labels", f"Verified {c.LABEL_MIN[c.VERIFIED]} or more, Likely "
+                   f"{c.LABEL_MIN[c.LIKELY]} to {c.LABEL_MIN[c.VERIFIED] - 1}, Unverified "
+                   f"below {c.LABEL_MIN[c.LIKELY]}, None when nothing was found. A venue "
+                   "is reachable when one way to reach it is Verified or Likely."),
+        ("Google says it closed for good", "0 for everything from that listing."),
+        ("", ""),
+        ("Best way to reach", "First that fits"),
+    ]
+    lines += [(f"{n}. {method}", text) for n, (method, text) in enumerate(c.METHOD_TEXT, 1)]
+    lines += [
+        (c.WAIT_METHOD, "Nothing Verified or Likely yet. The venue is on the Waiting on "
+                        "contact tab and is checked again every week, for 120 days."),
+        (NEWLY_REACHABLE, "Was waiting, and a recheck found a verified way to reach it. "
+                          "Shown first."),
+        ("Contact person", "The person named on the filing, if any. The search links are "
+                           "plain searches; nobody is looked up automatically, and a "
+                           "person never counts toward contact confidence."),
+    ]
+    return lines
+
+
+def legend_lines(contact: bool = False) -> list[tuple[str, str]]:
     """(label, value) rows for the How scoring works tab, built from the
-    live points table in qualify.py so the two never drift."""
+    live points table in qualify.py so the two never drift. `contact` adds
+    the contact confidence and outreach rules (once the lookup has run)."""
     from . import qualify as q
 
     lines = [
@@ -664,17 +822,22 @@ def legend_lines() -> list[tuple[str, str]]:
         ("All open", "Every lead not yet reviewed, from all days."),
         ("State tabs", "All open, split by state."),
     ]
+    if contact:
+        lines.insert(len(lines) - 1, (WAITING_TAB, "Venues we cannot reach yet: what was "
+                                                   "found, when they are checked again, and "
+                                                   "search links."))
+        lines += contact_legend_lines()
     return lines
 
 
-def _write_legend(ws) -> None:
+def _write_legend(ws, contact: bool = False) -> None:
     from openpyxl.styles import Font
 
     ws.title = "How scoring works"
-    for label, value in legend_lines():
+    for label, value in legend_lines(contact):
         ws.append([label, value])
-        if value == "Points" or label in ("How scoring works", "Stages", "Labels",
-                                           "What's new", "Tabs"):
+        if value in ("Points", "First that fits") or label in (
+                "How scoring works", "Stages", "Labels", "What's new", "Tabs"):
             ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
             ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
     ws.column_dimensions["A"].width = 52
