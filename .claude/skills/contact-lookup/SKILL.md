@@ -11,8 +11,10 @@ or more; never adult, never adding a permit) it:
 
 1. Searches Google Places (Text Search, New) for the venue name and address
    and keeps a listing only if its address is the same premises as the
-   filing (same house number, street, ZIP or city and suite; floors
-   ignored). This is the venue-history rule in `src/licmon/history.py`.
+   filing (same house number, street, ZIP or city; floors ignored). This is
+   the venue-history rule in `src/licmon/history.py`, with one difference: a
+   suite on one side only still matches, because Google often leaves out
+   the suite a filing names. Two different suites never match.
 2. Opens the listing's website once (home page only) and reads its
    Instagram, Facebook, email and phone links.
 3. Asks Instagram Business Discovery about the Instagram handles that
@@ -109,9 +111,10 @@ find with its label and score. Common reasons:
 - **Google listing at the same address under another name**: probably the
   old business at that address. Stays Unverified until the new name shows
   on Google or the venue's Instagram bio names the address.
-- **A suite on one side only**: the filing says "Ste 5" and Google has no
-  suite (or the other way round). The address rule treats them as two
-  premises, on purpose (a mall's anchor store is not its tenant).
+- **A different suite**: the filing says "Ste 5" and Google says "Ste 12".
+  Two premises. (A suite on one side only does match. A mall's listing at
+  the bare address still needs the venue's name to be more than
+  Unverified.)
 - **Only the filing phone**: it is often a lawyer or expediter, so it never
   makes a venue reachable on its own.
 

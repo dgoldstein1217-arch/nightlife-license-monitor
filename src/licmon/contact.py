@@ -12,8 +12,10 @@ Per venue (keyed by daily_leads.venue_key):
 1. Google Places Text Search (New) with the venue name and address. A place
    is used only when its address is the same premises as the filing, by the
    venue-history rule (``history.same_premises``: house number, street, ZIP
-   or city, suite; floors ignored). Name similarity is a second signal: a
-   listing at the same address under another name may be the old business.
+   or city; floors ignored), except that a suite on one side only still
+   matches (Google often drops it; two different suites never match). Name
+   similarity is a second signal: a listing at the same address under
+   another name may be the old business or the building.
 2. The listing's website, fetched once with the polite client (http.py):
    Instagram and Facebook page links, mailto emails and tel links.
 3. Instagram Business Discovery (Graph API) for handles that website links.
@@ -343,7 +345,7 @@ def match_place(row: dict, places: list[dict]) -> dict | None:
     for place in places:
         street, zip_code, city = place_address(place)
         if same_premises(row.get("address"), row.get("zip"), row.get("city"),
-                         street, zip_code, city):
+                         street, zip_code, city, suite_one_side_ok=True):
             return place
     return None
 

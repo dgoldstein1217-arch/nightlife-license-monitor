@@ -112,10 +112,12 @@ def test_address_match_uses_venue_history_rules():
     assert contact.match_place(row, [place(number="102"), good]) is good
     assert contact.match_place(row, [place(zip_code="78702")]) is None
     assert contact.match_place(row, [place(route="Fake Avenue")]) is None
-    # Suites must agree; floors are ignored.
+    # A suite on one side only matches (Google often drops it); two
+    # different suites never do. Floors are ignored.
     assert contact.match_place(venue(address="100 Fake St Ste 5"), [place(sub="5")])
-    assert contact.match_place(venue(address="100 Fake St Ste 5"), [place()]) is None
-    assert contact.match_place(row, [place(sub="#7")]) is None
+    assert contact.match_place(venue(address="100 Fake St Ste 5"), [place()])
+    assert contact.match_place(row, [place(sub="#7")])
+    assert contact.match_place(venue(address="100 Fake St Ste 5"), [place(sub="12")]) is None
     assert contact.match_place(venue(address="100 Fake St Fl 2"), [place()])
     # No street number on the listing: nothing to match on.
     assert contact.match_place(row, [place(number="")]) is None

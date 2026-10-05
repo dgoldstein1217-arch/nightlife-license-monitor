@@ -147,7 +147,8 @@ looked up: Google Places Text Search (New) with the name and address, the
 listing's website (Instagram, Facebook, email and phone links on its home
 page), and Instagram Business Discovery for the handles that website links.
 A Google listing counts only when its address is the same premises as the
-filing, by the venue-history rule below. Each way to reach the venue gets
+filing, by the venue-history rule below, except that a suite on one side
+only still matches (Google often drops it; two different suites never do). Each way to reach the venue gets
 points (a person's name never counts):
 
 | Signal | Points |

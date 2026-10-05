@@ -232,9 +232,12 @@ def _place(zip_code: str | None, city: str | None) -> tuple[str, str]:
 
 
 def same_premises(addr_a: str | None, zip_a: str | None, city_a: str | None,
-                  addr_b: str | None, zip_b: str | None, city_b: str | None) -> bool:
+                  addr_b: str | None, zip_b: str | None, city_b: str | None,
+                  suite_one_side_ok: bool = False) -> bool:
     """True when two addresses are the same premises (rule in the module
-    docstring)."""
+    docstring). With ``suite_one_side_ok`` a suite on one side only still
+    matches; two different suites never do. The contact lookup uses it,
+    because Google often drops the suite a filing names."""
     a, b = parse_address(addr_a), parse_address(addr_b)
     if not a or not b or a.number != b.number:
         return False
@@ -249,6 +252,8 @@ def same_premises(addr_a: str | None, zip_a: str | None, city_a: str | None,
         has_type_b = any(w in _SUFFIXES for w in b.street[1:])
         if has_type_a == has_type_b or a.street_no_type != b.street_no_type:
             return False
+    if suite_one_side_ok and not (a.unit and b.unit):
+        return True
     return a.unit == b.unit
 
 

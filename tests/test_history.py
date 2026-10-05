@@ -599,3 +599,12 @@ def test_slack_never_names_permits_and_labels_new_owner():
     assert "Zebra Fake Lounge 1" not in text
     assert "Zebra Fake Lounge 2, Austin (In review, New owner)" in text
     assert "Zebra Fake Lounge 3, Austin (In review)" in text
+
+
+def test_same_premises_suite_one_side():
+    # Venue history keeps the strict rule; the contact lookup relaxes it.
+    assert not same_premises("4301 Fake Dr", "75001", None, "4301 Fake Dr Ste B108", "75001", None)
+    assert same_premises("4301 Fake Dr", "75001", None, "4301 Fake Dr Ste B108", "75001", None,
+                         suite_one_side_ok=True)
+    assert not same_premises("4301 Fake Dr Ste A", "75001", None, "4301 Fake Dr Ste B108", "75001", None,
+                             suite_one_side_ok=True)
