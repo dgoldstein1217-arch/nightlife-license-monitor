@@ -116,10 +116,12 @@ def test_cli_attio_pull_logs_counts_only(monkeypatch, caplog):
     monkeypatch.setenv("ATTIO_API_KEY", "test-key")
     monkeypatch.setattr(cli.db, "connect", lambda: _NullConn())
     monkeypatch.setattr(cli.db, "init_schema", lambda conn: None)
-    monkeypatch.setattr(leadsheet, "load_rows", lambda conn, day: [
-        plan_row(1, business_name="Zebra Fake Lounge"),
-        plan_row(2, business_name="Quokka Fake Lounge", attio_list_status="Contacted",
-                 pipeline="In Attio: Contacted")])
+    today = [plan_row(1, business_name="Zebra Fake Lounge"),
+             plan_row(2, business_name="Quokka Fake Lounge", attio_list_status="Contacted",
+                      pipeline="In Attio: Contacted")]
+    older = [plan_row(3, business_name="Okapi Fake Lounge")]  # still on the plan from before
+    monkeypatch.setattr(leadsheet, "load_rows", lambda conn, day, open_only=False, **kw:
+                        today + older if open_only else today)
     saved = {}
     monkeypatch.setattr(feedback, "save_attio",
                         lambda conn, s, t, now: saved.update(statuses=s, targets=t))
@@ -132,9 +134,10 @@ def test_cli_attio_pull_logs_counts_only(monkeypatch, caplog):
     with caplog.at_level("INFO", logger="licmon"):
         assert cli.main(["attio-pull"]) == 0
     # A stale status never hides a venue from the lookup: both are checked.
-    assert set(saved["targets"]) == {"TX|78701|1 FAKE ST", "TX|78701|2 FAKE ST"}
+    assert set(saved["targets"]) == {"TX|78701|1 FAKE ST", "TX|78701|2 FAKE ST",
+                                     "TX|78701|3 FAKE ST"}
     assert ("attio pull: list entries read 1 (worked by the team 1); leads moved to "
-            "contacted 1, to rejected 0; targets looked up 2 (outreach under way 2)") \
+            "contacted 1, to rejected 0; targets looked up 3 (outreach under way 3)") \
         in caplog.text
     assert "Zebra" not in caplog.text and "Quokka" not in caplog.text
     assert "FAKE ST" not in caplog.text

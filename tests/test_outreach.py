@@ -266,8 +266,11 @@ def test_plan_inclusion_exclusion_and_order():
         "Quokka Fake Lounge",  # newly reachable first
         "Okapi Fake Lounge",  # then opening soon (not licensed yet)
         "Zebra Fake Lounge", "Narwhal Fake Lounge",  # then Hot, by score
-        "Ibex Fake Lounge"]
-    assert [p["order"] for p in plan] == [1, 2, 3, 4, 5]
+        "Ibex Fake Lounge",
+        "Out Details"]  # nothing new today, but nobody has reached out yet: it stays
+    assert [p["order"] for p in plan] == [1, 2, 3, 4, 5, 6]
+    assert [p["new_today"] for p in plan] == [True] * 5 + [False]
+    assert plan[-1]["header"].endswith("Still to reach")
     reasons = {r["business_name"]: outreach.left_out(r) for r in rows}
     assert reasons["Out Adult"] == "adult venue"
     assert reasons["Out Permit"] == "adding a permit"
@@ -286,7 +289,7 @@ def test_plan_entry_has_how_and_opener():
     [entry] = outreach.build_plan([plan_row(
         contact_person="Jane Q Tester", platforms=["SevenRooms"],
         current_platform="SevenRooms", stage="Approved")])
-    assert entry["header"] == "Zebra Fake Lounge, Austin | Approved | Hot, tier A"
+    assert entry["header"] == "Zebra Fake Lounge, Austin | Approved | Hot, tier A | New today"
     assert entry["how"] == "Instagram DM: @zebrafakelounge (Verified 90)"
     assert entry["second"] == "Call"
     assert entry["channel"] == "dm"
@@ -307,7 +310,7 @@ def test_plan_entry_has_how_and_opener():
 def test_empty_plan():
     assert outreach.build_plan([]) == []
     assert outreach.build_plan([plan_row(contact_status="waiting")]) == []
-    assert outreach.EMPTY_PLAN == "No new reachable venues today."
+    assert outreach.EMPTY_PLAN == "No reachable venues to contact today."
 
 
 def test_sole_proprietor_owner_is_greeted_by_first_name():
@@ -328,3 +331,14 @@ def test_fit_bullet_never_mixes_a_google_type_with_another_pitch():
     bar = plan_row(priority="B", business_name="Quokka Fake Tavern", company=None,
                    google_type="wine_bar")
     assert outreach.why(bar)[1] == "Wine bar: event tickets and texting regulars"
+
+
+def test_plan_carries_venues_nobody_has_reached_yet():
+    old = plan_row(1, business_name="Okapi Fake Lounge", whats_new=None, newly_reachable=None)
+    today = plan_row(2, business_name="Zebra Fake Lounge")
+    plan = outreach.build_plan([today], [old, dict(today)])
+    assert [(p["name"], p["new_today"]) for p in plan] == [
+        ("Zebra Fake Lounge", True), ("Okapi Fake Lounge", False)]
+    assert plan[1]["header"].endswith("Still to reach")
+    # once marked, it drops off
+    assert outreach.build_plan([], [dict(old, review_status="contacted")]) == []

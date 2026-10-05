@@ -567,7 +567,7 @@ def test_todays_plan_tab_comes_first_with_why_how_and_opener():
     wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows, outcomes=outcomes)))
     ws = wb.worksheets[0]
     assert ws.title == "Today's plan"
-    assert ws["A1"].value.startswith("2 new venues to reach today, best first.")
+    assert ws["A1"].value.startswith("2 venues to reach (2 new today), best first.")
     headers, cells = _table(ws, header_row=2)
     assert headers == ["Priority order", "Business name", "City", "Stage", "Why reach out",
                        "Best way to reach", "Contact", "Confidence", "Second best way",
@@ -604,7 +604,7 @@ def test_todays_plan_tab_when_nobody_new_is_reachable():
     rows = [r for r in checked_rows() if r["venue_key"] in ("wait", "never")]
     wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows)))
     ws = wb["Today's plan"]
-    assert ws["A1"].value == "No new reachable venues today."
+    assert ws["A1"].value == "No reachable venues to contact today."
     assert ws.max_row == 2  # the line and the header
 
 

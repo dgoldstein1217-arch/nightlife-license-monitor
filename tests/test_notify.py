@@ -525,7 +525,7 @@ def test_email_body_has_the_plan_in_both_parts(fake_xlsx):
     msg = notify.compose(plan_data(), DAY, sender="s", recipients=["o"])
     plain, html_body = bodies(msg)
     [item] = outreach.build_plan(plan_data()["leads"])
-    assert "Today's plan: 1 new venue to reach, best first. Send each one yourself." in plain
+    assert "Today's plan: 1 venue to reach (1 new today), best first. Each stays here until you mark it. Send each one yourself." in plain
     assert "1. Zebra Fake Lounge, Austin | Approved | Hot, tier A" in plain
     assert ("Why reach out:\n- License approved, not open yet: pitch before launch\n"
             "- Lounge: tables, bottle service and the door\n"
@@ -540,7 +540,7 @@ def test_email_body_has_the_plan_in_both_parts(fake_xlsx):
     assert "Outreach results, last 30 days: contacted 2, replied 1, won 0, wrong contact 0" \
         in plain
     assert "Instagram DM: contacted 2, replied 1" in plain
-    assert "<b>1. Zebra Fake Lounge, Austin | Approved | Hot, tier A</b>" in html_body
+    assert "<b>1. Zebra Fake Lounge, Austin | Approved | Hot, tier A | New today</b>" in html_body
     assert '<a href="https://www.instagram.com/zebrafakelounge/">@zebrafakelounge</a>' \
         in html_body
     assert "<li>Uses SevenRooms: switch pitch</li>" in html_body
@@ -558,8 +558,8 @@ def test_email_empty_plan_says_so(fake_xlsx):
     data = plan_data()
     data["leads"] = data["leads"][1:]
     plain, html_body = bodies(notify.compose(data, DAY, sender="s", recipients=["o"]))
-    assert "No new reachable venues today." in plain
-    assert "No new reachable venues today." in html_body
+    assert "No reachable venues to contact today." in plain
+    assert "No reachable venues to contact today." in html_body
     assert "Today's plan:" not in plain
 
 

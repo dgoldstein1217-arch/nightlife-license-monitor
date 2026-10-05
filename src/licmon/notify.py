@@ -169,8 +169,9 @@ def _plan_text(plan: list[dict]) -> list[str]:
     if not plan:
         return [outreach.EMPTY_PLAN]
     unit = "venue" if len(plan) == 1 else "venues"
-    lines = [f"{outreach.PLAN_TITLE}: {len(plan)} new {unit} to reach, best first. "
-             "Send each one yourself."]
+    new = sum(1 for item in plan if item.get("new_today"))
+    lines = [f"{outreach.PLAN_TITLE}: {len(plan)} {unit} to reach ({new} new today), best "
+             "first. Each stays here until you mark it. Send each one yourself."]
     for item in plan:
         lines += ["", "-" * 40, f"{item['order']}. {item['header']}", "Why reach out:"]
         lines += [f"- {b}" for b in item["why"]]
@@ -243,7 +244,8 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     contact_lines = _contact_lines(leads, list(data.get("open_leads") or []))
     contact_lines += feedback.results_lines(list(data.get("outcomes") or []))
     with_plan = leadsheet.contact_checked(leads + list(data.get("open_leads") or []))
-    plan = outreach.build_plan(leads) if with_plan else []
+    plan = (outreach.build_plan(leads, list(data.get("open_leads") or []))
+            if with_plan else [])
     plan_text = [""] + _plan_text(plan) if with_plan else []
     failed = sum(1 for s in sources if s.get("status") == "failed")
 

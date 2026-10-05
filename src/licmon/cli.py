@@ -212,7 +212,8 @@ def cmd_email(args) -> int:
     sender, recipients = notify.settings_from_env()
     leads = data["leads"]
     tier_a = sum(1 for lead in leads if lead.get("priority") == "A")
-    planned = (len(outreach.build_plan(leads)) if leadsheet.contact_checked(
+    planned = (len(outreach.build_plan(leads, list(data.get("open_leads") or [])))
+               if leadsheet.contact_checked(
         leads + list(data.get("open_leads") or [])) else 0)
     if args.preview:
         msg = notify.compose(data, day, sender=sender or "sender@example.com",
@@ -424,6 +425,10 @@ def cmd_attio_pull(args) -> int:
     with db.connect() as conn:
         db.init_schema(conn)
         rows = leadsheet.load_rows(conn, day)
+        keys = {r["venue_key"] for r in rows}
+        # Venues from past days stay on the plan until worked, so check them too.
+        rows += [r for r in leadsheet.load_rows(conn, None, open_only=True)
+                 if r["venue_key"] not in keys]
     # Plan venues as if Attio had nothing yet, so a stale status is rechecked.
     fresh = [dict(r, attio_list_status=None, attio_target_status=None,
                   pipeline="Already on Speakeasy" if r.get("on_speakeasy") else "")

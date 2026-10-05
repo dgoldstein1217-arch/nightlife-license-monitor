@@ -773,7 +773,7 @@ def build_workbook(new_rows: list[dict], open_rows: list[dict] | None = None,
     wb = Workbook()
     first = wb.active
     if checked:
-        _write_plan_sheet(first, outreach.build_plan(new_rows))
+        _write_plan_sheet(first, outreach.build_plan(new_rows, open_rows))
         first = wb.create_sheet()
         columns, open_columns = with_contact_columns(COLUMNS), with_contact_columns(OPEN_COLUMNS)
         waiting = waiting_rows(new_rows, open_rows)
@@ -811,8 +811,9 @@ PLAN_COLUMNS: list[tuple[str, str, int, bool]] = [
     ("opening_text", "Opening soon", 20, True),
     ("lead_ids", "Lead ID", 12, False),
 ]
-PLAN_NOTE = ("{n} new venues to reach today, best first. Nothing has contacted them: "
-             "send each opener yourself, then mark the Lead ID with licmon review.")
+PLAN_NOTE = ("{n} venues to reach ({new} new today), best first. Nothing has contacted "
+             "them: send each opener yourself, then mark the Lead ID with licmon review. "
+             "Each stays here until marked.")
 
 
 def _write_plan_sheet(ws, plan: list[dict]) -> None:
@@ -826,7 +827,8 @@ def _write_plan_sheet(ws, plan: list[dict]) -> None:
     from . import outreach
 
     ws.title = outreach.PLAN_TITLE
-    ws.append([PLAN_NOTE.format(n=len(plan)) if plan else outreach.EMPTY_PLAN])
+    new = sum(1 for item in plan if item.get("new_today"))
+    ws.append([PLAN_NOTE.format(n=len(plan), new=new) if plan else outreach.EMPTY_PLAN])
     ws.cell(row=1, column=1).font = Font(italic=True, bold=not plan)
     ws.append([h for _, h, _, _ in PLAN_COLUMNS])
     for cell in ws[2]:

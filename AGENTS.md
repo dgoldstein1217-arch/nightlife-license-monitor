@@ -320,15 +320,18 @@ wrong. Logs stay counts-only (`email sent: N leads (N tier A), plan N
 venues`).
 
 **The plan** (`src/licmon/outreach.py`, once the contact lookup has run)
-covers every reachable new venue for the day, no cap: venues on that
-day's sheet with a Verified or Likely way to reach them that are a new
-filing, a stage advance, or Newly reachable. It leaves out adult venues,
+covers every open venue with a Verified or Likely way to reach it that
+nobody has reached out to yet, no cap. A venue stays on the plan day after
+day until the owner marks it with `licmon review` (contacted, replied,
+won, rejected or snoozed) or the team works it in Attio. Venues that are
+new that day (a new filing, a stage advance, or Newly reachable) say New
+today and come first; the rest say Still to reach. It leaves out adult venues,
 venues only adding a permit, Already on Speakeasy venues, venues the team
 already works in Attio (list Status Contacted, Not a fit or Moved to
 Targets, or a Target with the same name whose status shows outreach under
 way), and venues reviewed as contacted, replied, won, rejected or snoozed.
-Order: Newly reachable first, then venues not open yet, then Hot, then
-lead score. Each venue shows:
+Order: New today first, then Newly reachable, then venues not open yet,
+then Hot, then lead score. Each venue shows:
 
 1. Name, city, stage and tier.
 2. **Why reach out**: 2 to 4 plain bullets built only from the data:

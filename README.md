@@ -134,7 +134,7 @@ point at ABC's public license lookup page for a human to open.
    works. Skips itself without `ATTIO_API_KEY`. Counts only in the log.
 11. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
    priority, contact and outreach-result counts, then today's attack plan
-   (`src/licmon/outreach.py`: every reachable new venue, no cap, with why
+   (`src/licmon/outreach.py`: every reachable venue nobody has reached out to yet, no cap, new ones first, with why
    reach out, how, and a copy-ready DM, email or call script in the
    owner's own wording), source health, and an Excel file of every lead.
    Addresses, filing phones and record links stay in the file. It sends on

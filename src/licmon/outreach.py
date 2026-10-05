@@ -1,19 +1,22 @@
-"""The daily attack plan: which new venues to reach today, why, how, and a
-copy-ready opener for each.
+"""The daily attack plan: which venues to reach, why, how, and a copy-ready
+opener for each.
 
 Built from one day's sheet rows (leadsheet.load_rows) once the contact
 lookup (contact.py) has run. Pure: no database, no network, no logging. It
 never contacts anyone: the owner reads the plan in his own email and on the
 workbook's Today's plan tab, and sends every message himself.
 
-Who is in the plan (build_plan): every venue on that day's sheet that is
-reachable (a Verified or Likely way to reach it) and is a new filing, a
-stage advance, or newly reachable. Left out (left_out): adult venues,
+Who is in the plan (build_plan): every open venue that is reachable (a
+Verified or Likely way to reach it) and that nobody has reached out to yet.
+A venue stays on the plan day after day until the owner marks it (licmon
+review) or the team works it in Attio. Venues that are new today (a new
+filing, a stage advance or newly reachable) are marked New today and come
+first; the rest say Still to reach. Left out (left_out): adult venues,
 venues only adding a permit, venues whose site links Speakeasy (already a
 client), venues the team already worked in Attio (list Status Contacted,
 Not a fit or Moved to Targets, or a Target with outreach under way), and
 venues already reviewed as contacted, replied, won, rejected or snoozed.
-Order: newly reachable first, then not open yet, then Hot, then lead score.
+Order: new today first, then not open yet, then Hot, then lead score.
 
 Copy: the opener wording is the owner's own and lives in the constants
 below. To change what an opener says, edit those strings and keep the
@@ -89,7 +92,7 @@ PROOF_ENV = {
     "restaurant": "OUTREACH_PROOF_RESTAURANT",
 }
 
-EMPTY_PLAN = "No new reachable venues today."
+EMPTY_PLAN = "No reachable venues to contact today."
 PLAN_TITLE = "Today's plan"
 
 DM, EMAIL, CALL = "dm", "email", "call"
@@ -394,8 +397,6 @@ def left_out(row: dict) -> str | None:
     """Why a sheet row is not in today's plan, or None when it is in."""
     if row.get("contact_status") != contact.REACHABLE:
         return "not reachable"
-    if not (row.get("whats_new") in _NEWS or row.get("newly_reachable")):
-        return "nothing new today"
     if row.get("adult"):
         return "adult venue"
     if row.get("venue_history") == ADDING_PERMIT:
@@ -414,13 +415,20 @@ def tier_label(row: dict) -> str:
     return f"Hot, tier {tier}" if row.get("hot") else f"Tier {tier}"
 
 
-def plan_key(row: dict):
-    """Newly reachable first, then not open yet, then Hot, then lead score."""
-    return (not row.get("newly_reachable"), timing(row) != "opening_soon", not row.get("hot"),
-            -(row.get("lead_score") or 0), row.get("business_name") or "")
+def is_new_today(row: dict) -> bool:
+    """A row from the day's own sheet that is a new filing, a stage advance
+    or newly reachable."""
+    return row.get("whats_new") in _NEWS or bool(row.get("newly_reachable"))
 
 
-def entry(row: dict, order: int) -> dict:
+def plan_key(row: dict, new_today: bool = False):
+    """New today first, then newly reachable, then not open yet, then Hot,
+    then lead score."""
+    return (not new_today, not row.get("newly_reachable"), timing(row) != "opening_soon",
+            not row.get("hot"), -(row.get("lead_score") or 0), row.get("business_name") or "")
+
+
+def entry(row: dict, order: int, new_today: bool = False) -> dict:
     """One plan entry: everything the email block and the plan tab show."""
     method = row.get("outreach_method") or ""
     contact_text = row.get("contact_url_text") or row.get("contact_url") or ""
@@ -429,7 +437,8 @@ def entry(row: dict, order: int) -> dict:
         how += f" ({row['confidence']})"
     header = " | ".join(p for p in (
         ", ".join(p for p in (row.get("business_name"), row.get("city")) if p),
-        row.get("stage"), tier_label(row), row.get("newly_reachable")) if p)
+        row.get("stage"), tier_label(row),
+        row.get("newly_reachable") or ("New today" if new_today else "Still to reach")) if p)
     return {
         "order": order, "name": row.get("business_name"), "city": row.get("city"),
         "stage": row.get("stage"), "tier": tier_label(row), "header": header,
@@ -440,15 +449,21 @@ def entry(row: dict, order: int) -> dict:
         "contact_person": row.get("contact_person") or "",
         "current_platform": row.get("current_platform") or "",
         "opening_text": row.get("opening_text") or "",
-        "newly_reachable": bool(row.get("newly_reachable")),
+        "newly_reachable": bool(row.get("newly_reachable")), "new_today": new_today,
         "lead_ids": row.get("lead_ids") or "", "venue_key": row.get("venue_key"),
     }
 
 
-def build_plan(rows: list[dict]) -> list[dict]:
-    """Every venue for today's plan (no cap), best first, once each."""
-    picked: dict[str, dict] = {}
-    for row in sorted(rows, key=plan_key):
+def build_plan(rows: list[dict], carry: list[dict] = ()) -> list[dict]:
+    """Every venue for today's plan (no cap), best first, once each. `rows`
+    is the day's sheet; `carry` is every open lead (leadsheet.load_rows with
+    open_only), so venues from past days stay on the plan until someone
+    reaches out to them."""
+    today = [(row, is_new_today(row)) for row in rows]
+    keys = {row.get("venue_key") for row in rows}
+    older = [(row, False) for row in carry if row.get("venue_key") not in keys]
+    picked: dict[str, tuple[dict, bool]] = {}
+    for row, new in sorted(today + older, key=lambda rn: plan_key(*rn)):
         if left_out(row) is None:
-            picked.setdefault(row.get("venue_key") or row.get("business_name"), row)
-    return [entry(row, n) for n, row in enumerate(picked.values(), 1)]
+            picked.setdefault(row.get("venue_key") or row.get("business_name"), (row, new))
+    return [entry(row, n, new) for n, (row, new) in enumerate(picked.values(), 1)]
