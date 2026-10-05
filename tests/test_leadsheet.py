@@ -606,3 +606,9 @@ def test_todays_plan_tab_when_nobody_new_is_reachable():
     ws = wb["Today's plan"]
     assert ws["A1"].value == "No new reachable venues today."
     assert ws.max_row == 2  # the line and the header
+
+
+def test_contact_person_skips_venue_names():
+    assert leadsheet._contact_person("Zebra Fake Dive Bar; Jane Q Tester") == "Jane Q Tester"
+    assert leadsheet._contact_person("Quokka Fake Lounge") is None
+    assert leadsheet._contact_person("Sam Hall") == "Sam Hall"

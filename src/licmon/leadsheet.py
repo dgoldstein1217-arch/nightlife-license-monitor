@@ -307,12 +307,23 @@ def _is_company(name: str) -> bool:
     return bool(words & history_mod._ENTITY_WORDS)
 
 
+# A name with one of these words is a venue, not a person (Washington lists
+# some applicants under the trade name). Common surnames such as Hall or
+# House are left out on purpose.
+_VENUE_WORDS = {"BAR", "LOUNGE", "RESTAURANT", "GRILL", "CLUB", "KITCHEN", "CAFE", "TAVERN",
+                "PUB", "NIGHTCLUB", "ROOFTOP", "COCKTAIL", "COCKTAILS", "BISTRO", "EATERY",
+                "BREWING", "BREWERY", "TAPROOM", "SALOON", "CANTINA", "THEATER", "THEATRE",
+                "COMEDY", "KARAOKE", "BALLROOM", "DIVE", "PIZZA", "SUSHI", "TACOS", "WINERY",
+                "SPIRITS", "LIQUOR", "LIQUORS", "DINER"}
+
+
 def _contact_person(people: str | None) -> str | None:
-    """The first named person on the filing (not a company). Only what the
-    filing says: people are never looked up."""
+    """The first named person on the filing (not a company or a venue name).
+    Only what the filing says: people are never looked up."""
     for name in (people or "").split(";"):
         name = name.strip()
-        if name and not _is_company(name):
+        words = set(re.sub(r"[^A-Z0-9]+", " ", name.upper()).split())
+        if name and not _is_company(name) and not words & _VENUE_WORDS:
             return name
     return None
 
