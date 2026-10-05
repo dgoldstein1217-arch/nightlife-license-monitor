@@ -35,7 +35,8 @@ RECORD_EXPORT_COLUMNS = [
     "review_status", "review_notes", "changes", "record_id", "stage", "lead_score",
     "hot", "adult", "venue_history", "prior_licenses", "prior_since",
 ]
-REVIEW_STATUSES = ("new", "approved", "rejected", "contacted", "snoozed")
+REVIEW_STATUSES = ("new", "approved", "rejected", "contacted", "snoozed", "replied",
+                   "wrong_contact", "won")
 
 
 # Neon Free stops accepting writes at 512 MB. Fail loudly well before that so
@@ -108,7 +109,7 @@ def _queue_rows(conn, day: date | None, open_only: bool, per_record: bool = Fals
         where.append("queue_date = %s")
         params.append(day)
     if open_only:
-        where.append("review_status = 'new'")
+        where.append("review_status IN ('new', 'wrong_contact')")
     sql = (f"SELECT {', '.join(columns)} FROM {view}"
            + (f" WHERE {' AND '.join(where)}" if where else "")
            + " ORDER BY queue_date DESC, tier, score DESC, metro, legal_name")
@@ -222,15 +223,22 @@ def cmd_email(args) -> int:
 
 
 def cmd_review(args) -> int:
-    with db.connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            """UPDATE records SET review_status=%s,
-                   review_notes=COALESCE(%s, review_notes), reviewed_at=now()
-               WHERE id = ANY(%s)""",
-            (args.status, args.note, args.record_id))
-        n = cur.rowcount
-        conn.commit()
-    print(f"updated {n} record(s)")
+    """Set a review status. contacted, replied, won and wrong_contact are
+    also logged as outreach results with the best way to reach at the time;
+    wrong_contact marks that contact bad and has the venue looked up again
+    on the next run (feedback.py)."""
+    from . import feedback
+
+    with db.connect() as conn:
+        db.init_schema(conn)  # the outcome tables may not exist yet
+        n, venues = feedback.record_review(conn, args.record_id, args.status, args.note)
+    extra = ""
+    if venues and args.status in feedback.OUTCOME_TEXT:
+        extra = f", {venues} venue(s) logged as {feedback.OUTCOME_TEXT[args.status]}"
+        if args.status == "wrong_contact":
+            extra += "; that contact is never suggested again and the venue is checked again"
+            extra += " on the next run"
+    print(f"updated {n} record(s){extra}")
     return 0 if n else 1
 
 
@@ -388,6 +396,50 @@ def cmd_attio_sync(args) -> int:
     return 0
 
 
+def cmd_attio_pull(args) -> int:
+    """Read the team's work back from Attio (read-only): the License Leads
+    list Status of every entry, and the status of a same-name Target for
+    today's plan venues (at most ATTIO_DAILY_CAP lookups). Contacted and Not
+    a fit move leads forward to contacted and rejected; the plan leaves out
+    venues the team already works. Logs counts only."""
+    from . import attio, feedback, leadsheet, outreach
+
+    log = logging.getLogger("licmon")
+    if not attio.configured():
+        log.info("attio pull skipped (not configured)")
+        return 0
+    now = datetime.now(timezone.utc)
+    day = args.date or now.date()
+    with db.connect() as conn:
+        db.init_schema(conn)
+        rows = leadsheet.load_rows(conn, day)
+    # Plan venues as if Attio had nothing yet, so a stale status is rechecked.
+    fresh = [dict(r, attio_list_status=None, attio_target_status=None,
+                  pipeline="Already on Speakeasy" if r.get("on_speakeasy") else "")
+             for r in rows]
+    plan = {r["venue_key"]: r for r in fresh if outreach.left_out(r) is None}
+    cap = attio.daily_cap()
+    client = attio.Client()
+    try:
+        statuses = attio.list_statuses(client)
+        targets = {key: attio.find_target_status(client, row["business_name"])
+                   for key, row in list(plan.items())[:cap] if row.get("business_name")}
+    except attio.AttioError as exc:
+        log.error("%s", exc)  # "attio failed (HTTP <status> <code>)": no lead data
+        return 1
+    with db.connect() as conn:
+        feedback.save_attio(conn, statuses, targets, now)
+        moved = feedback.pull_attio(conn, statuses, now)
+    worked = sum(1 for k, s in statuses.items() if s in attio.PLAN_EXCLUDED_STATUSES)
+    log.info("attio pull: list entries read %d (worked by the team %d); leads moved to "
+             "contacted %d, to rejected %d; targets looked up %d (outreach under way %d); "
+             "plan venues over the lookup cap %d", len(statuses), worked,
+             moved["contacted"], moved["rejected"], len(targets),
+             sum(1 for s in targets.values() if attio.target_worked(s)),
+             max(0, len(plan) - cap))
+    return 0
+
+
 def cmd_enrich(args) -> int:
     """Look up and verify contact details for eligible venues (contact.py).
     Never contacts a business. Skips itself without GOOGLE_PLACES_API_KEY;
@@ -515,6 +567,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--write", action="store_true", help="really write to Attio")
     s.add_argument("--counts", metavar="FILE", help="write counts-only JSON here for Slack")
     s.set_defaults(func=cmd_attio_sync)
+
+    ap = sub.add_parser("attio-pull", help="read the team's Attio statuses back (read-only "
+                                           "in Attio): updates review status and the plan")
+    ap.add_argument("--date", type=date.fromisoformat, help="plan day, default today UTC")
+    ap.set_defaults(func=cmd_attio_pull)
 
     n = sub.add_parser("enrich", help="find and verify venue contact details for eligible "
                                       "leads (GOOGLE_PLACES_API_KEY); contacts nobody")

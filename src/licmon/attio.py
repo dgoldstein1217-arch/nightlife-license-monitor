@@ -430,9 +430,9 @@ def _fold(text) -> str:
     return " ".join(str(text or "").split()).casefold()
 
 
-def find_target(client: Client, name: str) -> str | None:
-    """record id of a Target whose name equals `name`, ignoring case and
-    extra spaces. Attio's $contains is case-insensitive; exactness is checked
+def _find_target_record(client: Client, name: str) -> dict | None:
+    """The Target record whose name equals `name`, ignoring case and extra
+    spaces. Attio's $contains is case-insensitive; exactness is checked
     here."""
     data = client.request(
         "POST", f"/objects/{PARENT_OBJECT}/records/query",
@@ -440,11 +440,72 @@ def find_target(client: Client, name: str) -> str | None:
     want = _fold(name)
     for rec in (data or {}).get("data") or []:
         for value in (rec.get("values") or {}).get(TARGET_NAME) or []:
-            if _fold(value.get("value")) == want:
-                record_id = (rec.get("id") or {}).get("record_id")
-                if record_id:
-                    return record_id
+            if _fold(value.get("value")) == want and (rec.get("id") or {}).get("record_id"):
+                return rec
     return None
+
+
+def find_target(client: Client, name: str) -> str | None:
+    """record id of a Target whose name equals `name` (see above)."""
+    rec = _find_target_record(client, name)
+    return rec["id"]["record_id"] if rec else None
+
+
+def _titles(values, key: str) -> list[str]:
+    """Titles in Attio's value envelope: {"status": {"title": ...}} for a
+    status, {"option": {"title": ...}} for a select. Archived history rows
+    (active_until set) are skipped."""
+    out = []
+    for value in values or []:
+        if not isinstance(value, dict) or value.get("active_until"):
+            continue
+        inner = value.get(key)
+        title = inner.get("title") if isinstance(inner, dict) else inner
+        if isinstance(title, str) and title:
+            out.append(title)
+    return out
+
+
+def find_target_status(client: Client, name: str) -> str | None:
+    """The status of a Target named `name` (e.g. Prespecting, In
+    conversation), or None when there is no such Target."""
+    rec = _find_target_record(client, name)
+    if rec is None:
+        return None
+    titles = _titles((rec.get("values") or {}).get(TARGET_STATUS_ATTR), "status")
+    return titles[-1] if titles else ""
+
+
+#: Entries read per page and the most pages read (a runaway guard).
+LIST_PAGE = 500
+LIST_MAX_PAGES = 40
+
+
+def list_statuses(client: Client) -> dict[str, str | None]:
+    """venue key -> the team's Status for every entry on the License Leads
+    list. Read-only, LIST_PAGE entries per call."""
+    found: dict[str, str | None] = {}
+    offset = 0
+    for _ in range(LIST_MAX_PAGES):
+        data = client.request("POST", f"/lists/{LIST_SLUG}/entries/query",
+                              body={"limit": LIST_PAGE, "offset": offset}, allow_404=True)
+        if data is None:
+            raise AttioError(f"list {LIST_SLUG} not found; run licmon attio-setup")
+        batch = [e for e in data.get("data") or [] if isinstance(e, dict)]
+        new = 0
+        for entry in batch:
+            values = entry.get("entry_values") or {}
+            keys = [v.get("value") for v in values.get(MATCH_ATTRIBUTE) or []
+                    if isinstance(v, dict) and v.get("value")]
+            if not keys or keys[0] in found:
+                continue
+            status = _titles(values.get(STATUS_ATTRIBUTE), "option")
+            found[keys[0]] = status[-1] if status else None
+            new += 1
+        if len(batch) < LIST_PAGE or not new:  # last page, or offset ignored
+            break
+        offset += len(batch)
+    return found
 
 
 def check_target_fields(client: Client) -> None:

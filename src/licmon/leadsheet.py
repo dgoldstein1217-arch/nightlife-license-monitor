@@ -393,9 +393,27 @@ def load_rows(conn, day: date | None, open_only: bool = False,
         if extra:
             rows += load_rows(conn, None, open_only=True, venue_keys=extra,
                               with_contacts=False)
+    attach_attio(conn, rows)
     attach_contacts(conn, rows, day)
     rows.sort(key=sort_key)
     return rows
+
+
+def attach_attio(conn, rows: list[dict]) -> None:
+    """Add what Attio says about each venue (licmon attio-pull): the team's
+    list Status and a same-name Target's status."""
+    keys = sorted({r["venue_key"] for r in rows if r.get("venue_key")})
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('attio_status') IS NOT NULL")
+        if not keys or not cur.fetchone()[0]:
+            return
+        cur.execute("SELECT venue_key, list_status, target_status FROM attio_status "
+                    "WHERE venue_key = ANY(%s)", (keys,))
+        found = {k: (ls, ts) for k, ls, ts in cur.fetchall()}
+    for row in rows:
+        if row.get("venue_key") in found:
+            row["attio_list_status"], row["attio_target_status"] = found[row["venue_key"]]
+            row["pipeline"] = pipeline_note(row)
 
 
 def _has_contact_table(conn) -> bool:

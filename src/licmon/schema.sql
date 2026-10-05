@@ -234,3 +234,26 @@ ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS rating_count INTEGER;
 ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS tier_adjusted TEXT;    -- A or B when Google's type moves the tier
 ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS google_says TEXT;      -- "Google says nightclub"
 ALTER TABLE contact_checks ADD COLUMN IF NOT EXISTS bad_channels JSONB NOT NULL DEFAULT '[]';  -- [{kind, value}] marked wrong_contact
+
+-- Outreach results (feedback.py): contacted, replied, won and wrong_contact,
+-- with the best way to reach at the time. From `licmon review` and from the
+-- team's Attio list Status. Counts only ever leave the database.
+CREATE TABLE IF NOT EXISTS outreach_outcomes (
+    id          BIGSERIAL PRIMARY KEY,
+    venue_key   TEXT NOT NULL,
+    outcome     TEXT NOT NULL,                  -- contacted | replied | won | wrong_contact
+    method      TEXT,                           -- best way to reach when it was recorded
+    source      TEXT NOT NULL DEFAULT 'review', -- review | attio
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS outreach_outcomes_time_idx ON outreach_outcomes (recorded_at);
+
+-- What Attio says per venue (licmon attio-pull): the team's Status on the
+-- License Leads list, and the status of a Target with the venue's name.
+-- Keeps the plan off venues the team already works.
+CREATE TABLE IF NOT EXISTS attio_status (
+    venue_key     TEXT PRIMARY KEY,
+    list_status   TEXT,   -- New | Moved to Targets | Not a fit | Contacted
+    target_status TEXT,   -- target_client.status, e.g. In conversation
+    checked_at    TIMESTAMPTZ NOT NULL
+);
