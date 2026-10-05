@@ -286,8 +286,8 @@ def test_sheet_without_contact_lookup_is_laid_out_as_before():
 def test_sheet_moves_unreachable_venues_to_waiting_tab():
     rows = checked_rows()
     wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows)))
-    assert wb.sheetnames == ["New", "Existing venues", "Waiting on contact", "All open",
-                             "TX", "How scoring works"]
+    assert wb.sheetnames == ["Today's plan", "New", "Existing venues", "Waiting on contact",
+                             "All open", "TX", "How scoring works"]
     headers, cells = _table(wb["New"])
     name = headers.index("Business name")
     assert headers[name + 1:name + 7] == ["Newly reachable", "Best way to reach", "Contact",
@@ -554,3 +554,55 @@ def test_platform_and_opening_columns_on_lead_tabs():
     speakeasy = leadsheet.apply_contact(dict(rows[0]), check(
         "reachable", platforms=["Speakeasy"]), DAY)
     assert speakeasy["on_speakeasy"] and speakeasy["pipeline"] == "Already on Speakeasy"
+
+
+# --- Today's plan tab (outreach.build_plan) ---
+
+def test_todays_plan_tab_comes_first_with_why_how_and_opener():
+    rows = checked_rows()
+    by_key = {r["venue_key"]: r for r in rows}
+    by_key["reach"]["contact_person"] = "Jane Q Tester"
+    leadsheet.apply_contact(by_key["reach"], check("reachable", platforms=[]), DAY)
+    outcomes = [("contacted", "Call", 2), ("won", "Call", 1)]
+    wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows, outcomes=outcomes)))
+    ws = wb.worksheets[0]
+    assert ws.title == "Today's plan"
+    assert ws["A1"].value.startswith("2 new venues to reach today, best first.")
+    headers, cells = _table(ws, header_row=2)
+    assert headers == ["Priority order", "Business name", "City", "Stage", "Why reach out",
+                       "Best way to reach", "Contact", "Confidence", "Second best way",
+                       "Opener", "Contact person", "Current platform", "Opening soon",
+                       "Lead ID"]
+    names = [c["Business name"].value for c in cells]
+    assert names == ["Fake Taproom", "Zebra Fake Lounge"]  # newly reachable first
+    zebra = cells[1]
+    assert zebra["Priority order"].value == 2
+    assert zebra["Why reach out"].value.splitlines()[0] == (
+        "- License just filed, not open yet: pitch before launch")
+    assert "- No ticketing or reservations found on their site: greenfield" in \
+        zebra["Why reach out"].value
+    assert zebra["Best way to reach"].value == "Instagram DM"
+    assert zebra["Contact"].value == "@zebrafakelounge"
+    assert zebra["Contact"].hyperlink.target == "https://www.instagram.com/zebrafakelounge/"
+    assert zebra["Opener"].value.startswith("Hey Jane,\n\nCongrats on the upcoming opening")
+    assert zebra["Opener"].alignment.wrap_text and zebra["Why reach out"].alignment.wrap_text
+    assert zebra["Contact person"].value == "Jane Q Tester"
+    assert zebra["Current platform"].value == "None found on their site"
+    assert zebra["Lead ID"].value == "1"
+    # The waiting venue and the venue never checked are not in the plan.
+    assert "Quokka Fake Club" not in names and "Fake Bistro" not in names
+    legend = {c.value: ws_b.value for c, ws_b in wb["How scoring works"].iter_rows(
+        min_col=1, max_col=2)}
+    assert legend["Outreach results, last 30 days"] == (
+        "contacted 2, replied 0, won 1, wrong contact 0")
+    assert legend["  Call"] == "contacted 2, won 1"
+    text = " ".join(str(v) for row in wb["How scoring works"].values for v in row if v)
+    assert "—" not in text
+
+
+def test_todays_plan_tab_when_nobody_new_is_reachable():
+    rows = [r for r in checked_rows() if r["venue_key"] in ("wait", "never")]
+    wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows)))
+    ws = wb["Today's plan"]
+    assert ws["A1"].value == "No new reachable venues today."
+    assert ws.max_row == 2  # the line and the header

@@ -738,29 +738,37 @@ def waiting_rows(*groups: list[dict]) -> list[dict]:
                   key=lambda r: (r.get("contact_status") == "gave_up",) + sort_key(r))
 
 
-def build_workbook(new_rows: list[dict], open_rows: list[dict] | None = None) -> bytes:
+def build_workbook(new_rows: list[dict], open_rows: list[dict] | None = None,
+                   outcomes: list[tuple] | None = None) -> bytes:
     """The owner's workbook: New (new venues and unknown history), Existing
     venues (new owner or adding a permit), All open, one tab per state with
     open leads (from the data, not a fixed list), then How scoring works.
 
-    Once the contact lookup has run (any row checked), venues it checked
-    without finding verified contact leave those tabs for a Waiting on
+    Once the contact lookup has run (any row checked), a Today's plan tab
+    comes first (outreach.build_plan on the new rows), venues it checked
+    without finding verified contact leave the lead tabs for a Waiting on
     contact tab after Existing venues, and the lead tabs gain the contact
-    columns. Venues it never checked stay where they were."""
+    columns. Venues it never checked stay where they were. `outcomes`
+    (feedback.results) adds the outreach results to How scoring works."""
     from openpyxl import Workbook
+
+    from . import outreach
 
     open_rows = sorted(open_rows or [], key=sort_key)
     new_rows = sorted(new_rows, key=sort_key)
     checked = contact_checked(new_rows) or contact_checked(open_rows)
     columns, open_columns = COLUMNS, OPEN_COLUMNS
     waiting: list[dict] = []
+    wb = Workbook()
+    first = wb.active
     if checked:
+        _write_plan_sheet(first, outreach.build_plan(new_rows))
+        first = wb.create_sheet()
         columns, open_columns = with_contact_columns(COLUMNS), with_contact_columns(OPEN_COLUMNS)
         waiting = waiting_rows(new_rows, open_rows)
         new_rows = [lead_tab_view(r) for r in new_rows if not is_waiting(r)]
         open_rows = [lead_tab_view(r) for r in open_rows if not is_waiting(r)]
-    wb = Workbook()
-    _write_sheet(wb.active, [r for r in new_rows if not is_existing(r)], columns, "New")
+    _write_sheet(first, [r for r in new_rows if not is_existing(r)], columns, "New")
     _write_sheet(wb.create_sheet(), [r for r in new_rows if is_existing(r)], columns,
                  "Existing venues", note=EXISTING_NOTE)
     if checked:
@@ -771,8 +779,77 @@ def build_workbook(new_rows: list[dict], open_rows: list[dict] | None = None) ->
         _write_sheet(wb.create_sheet(),
                      [r for r in open_rows if (r.get("state") or "Other") == state],
                      open_columns, state)
-    _write_legend(wb.create_sheet(), contact=checked)
+    _write_legend(wb.create_sheet(), contact=checked, outcomes=outcomes)
     return _save(wb)
+
+
+#: The Today's plan tab: (key, header, width, wrap).
+PLAN_COLUMNS: list[tuple[str, str, int, bool]] = [
+    ("order", "Priority order", 9, False),
+    ("name", "Business name", 30, True),
+    ("city", "City", 14, False),
+    ("stage", "Stage", 11, False),
+    ("why_text", "Why reach out", 48, True),
+    ("method", "Best way to reach", 22, True),
+    ("contact_url", "Contact", 26, False),
+    ("confidence", "Confidence", 13, False),
+    ("second", "Second best way", 20, True),
+    ("opener", "Opener", 64, True),
+    ("contact_person", "Contact person", 20, True),
+    ("current_platform", "Current platform", 20, True),
+    ("opening_text", "Opening soon", 20, True),
+    ("lead_ids", "Lead ID", 12, False),
+]
+PLAN_NOTE = ("{n} new venues to reach today, best first. Nothing has contacted them: "
+             "send each opener yourself, then mark the Lead ID with licmon review.")
+
+
+def _write_plan_sheet(ws, plan: list[dict]) -> None:
+    """The Today's plan tab: one row per plan venue (outreach.build_plan),
+    or the one line saying there are none."""
+    import math
+
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    from . import outreach
+
+    ws.title = outreach.PLAN_TITLE
+    ws.append([PLAN_NOTE.format(n=len(plan)) if plan else outreach.EMPTY_PLAN])
+    ws.cell(row=1, column=1).font = Font(italic=True, bold=not plan)
+    ws.append([h for _, h, _, _ in PLAN_COLUMNS])
+    for cell in ws[2]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F2937")
+        cell.alignment = Alignment(vertical="center")
+    link_font = Font(color="1D4ED8", underline="single")
+    top = Alignment(vertical="top")
+    wrap = Alignment(vertical="top", wrap_text=True)
+    for i, item in enumerate(plan, start=3):
+        values = dict(item, why_text="\n".join(f"- {b}" for b in item["why"]))
+        lines = 1
+        for j, (key, _, width, wraps) in enumerate(PLAN_COLUMNS, start=1):
+            value = values.get(key)
+            cell = ws.cell(row=i, column=j)
+            if key == "contact_url":
+                cell.value = values.get("contact") or ""
+                if isinstance(value, str) and value.startswith(("http://", "https://",
+                                                                "mailto:", "tel:")):
+                    cell.hyperlink = value
+                    cell.font = link_font
+            else:
+                cell.value = "" if value is None else value
+            if cell.data_type == "f":
+                cell.data_type = "s"  # never let a source string become a formula
+            cell.alignment = wrap if wraps else top
+            if wraps and isinstance(cell.value, str):
+                per_line = max(1, int(width * 1.1))
+                lines = max(lines, sum(math.ceil(max(1, len(part)) / per_line)
+                                       for part in cell.value.split("\n")))
+        ws.row_dimensions[i].height = min(409, 15 * lines + 4)
+    for j, (_, _, width, _) in enumerate(PLAN_COLUMNS, start=1):
+        ws.column_dimensions[get_column_letter(j)].width = width
+    ws.freeze_panes = "C3"
 
 
 def _save(wb) -> bytes:
@@ -902,10 +979,57 @@ def contact_legend_lines() -> list[tuple[str, str]]:
     return lines
 
 
-def legend_lines(contact: bool = False) -> list[tuple[str, str]]:
+def plan_legend_lines(outcomes: list[tuple] | None = None) -> list[tuple[str, str]]:
+    """The Today's plan part of How scoring works, plus the outreach
+    results of the last 30 days (counts only)."""
+    from . import feedback
+
+    lines = [
+        ("", ""),
+        ("Today's plan", ""),
+        ("Who is in it", "Every venue on the day's sheet we can reach (Verified or Likely) "
+                         "that is a new filing, moved to a later stage, or newly reachable. "
+                         "No cap."),
+        ("Left out", "Adult venues, venues only adding a permit, venues whose site links "
+                     "Speakeasy, venues the team already works in Attio (Contacted, Not a "
+                     "fit, Moved to Targets, or a Target with outreach under way), and venues "
+                     "you marked contacted, replied, won, rejected or snoozed."),
+        ("Order", "Newly reachable first, then venues not open yet, then Hot, then score."),
+        ("Opener", "Ready to copy, in the format of the best way to reach: a DM, an email "
+                   "with its subject line, or a call script. Nothing is sent for you."),
+        ("Current platform", "Booking, ticketing or POS platforms linked or embedded on the "
+                             "venue's home page. None found on their site means a "
+                             "greenfield pitch."),
+        ("Opening soon", "Their site or Instagram says coming soon, opening soon, grand "
+                         "opening, soft opening or opening in a month, or Google lists the "
+                         "place with no reviews yet or as not open yet. Now open means it "
+                         "just opened."),
+        ("Google says", "Google's type for a listing with the venue's name. A bar or "
+                        "restaurant Google calls a nightclub or ticketed venue shows as A. "
+                        "A club or lounge name Google calls a restaurant shows as B, unless "
+                        "a nightlife license or a ticketed word made it A. The tier shown is "
+                        "the one used for Hot, Attio and the plan."),
+        ("Speakeasy / Attio", "Already on Speakeasy, or already worked in Attio. Left out "
+                              "of the plan."),
+        ("Mark the result", "licmon review <Lead ID> --status contacted, replied, won or "
+                            "wrong_contact. Wrong contact is never suggested again and the "
+                            "venue is checked again on the next run."),
+    ]
+    results = feedback.results_lines(outcomes or [])
+    if results:
+        lines += [("", ""), ("Outreach results", "Counts")]
+        lines += [(results[0].split(": ", 1)[0], results[0].split(": ", 1)[1])]
+        lines += [(f"  {line.split(': ', 1)[0]}", line.split(": ", 1)[1])
+                  for line in results[1:]]
+    return lines
+
+
+def legend_lines(contact: bool = False, outcomes: list[tuple] | None = None
+                 ) -> list[tuple[str, str]]:
     """(label, value) rows for the How scoring works tab, built from the
     live points table in qualify.py so the two never drift. `contact` adds
-    the contact confidence and outreach rules (once the lookup has run)."""
+    the contact confidence and outreach rules and the plan (once the lookup
+    has run); `outcomes` adds the last 30 days' outreach results."""
     from . import qualify as q
 
     lines = [
@@ -978,17 +1102,19 @@ def legend_lines(contact: bool = False) -> list[tuple[str, str]]:
                                                    "found, when they are checked again, and "
                                                    "search links."))
         lines += contact_legend_lines()
+        lines += plan_legend_lines(outcomes)
     return lines
 
 
-def _write_legend(ws, contact: bool = False) -> None:
+def _write_legend(ws, contact: bool = False, outcomes: list[tuple] | None = None) -> None:
     from openpyxl.styles import Font
 
     ws.title = "How scoring works"
-    for label, value in legend_lines(contact):
+    for label, value in legend_lines(contact, outcomes):
         ws.append([label, value])
-        if value in ("Points", "First that fits") or label in (
-                "How scoring works", "Stages", "Labels", "What's new", "Tabs"):
+        if value in ("Points", "First that fits", "Counts") or label in (
+                "How scoring works", "Stages", "Labels", "What's new", "Tabs",
+                "Today's plan"):
             ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
             ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
     ws.column_dimensions["A"].width = 52

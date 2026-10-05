@@ -127,13 +127,18 @@ def cmd_export(args) -> int:
     if xlsx and full:
         raise SystemExit("--full / --per-record write CSV only; use a .csv file name")
     if not full:
+        from . import feedback
+
         with db.connect() as conn:
+            db.init_schema(conn)  # columns added since the last run may be missing
             rows = leadsheet.load_rows(conn, day, args.open)
             open_rows = leadsheet.load_rows(conn, None, True) if xlsx else []
+            outcomes = feedback.results(conn) if xlsx else []
         if xlsx:
-            # Tabs: New (the rows asked for), All open, one per state, legend.
+            # Tabs: Today's plan, New (the rows asked for), All open, one per
+            # state, legend.
             with open(args.out, "wb") as fh:
-                fh.write(leadsheet.build_workbook(rows, open_rows))
+                fh.write(leadsheet.build_workbook(rows, open_rows, outcomes=outcomes))
         else:
             out = open(args.out, "w", newline="", encoding="utf-8") if args.out else sys.stdout
             try:
@@ -184,10 +189,12 @@ def cmd_email(args) -> int:
     """Email the day's leads to the owner, or write a local preview.
 
     Logs say only counts and sent/skipped/failed: workflow logs are public.
+    The message itself names the plan's venues; it goes only to
+    LEADS_EMAIL_TO, and a preview must be written outside the repository.
     """
     from pathlib import Path
 
-    from . import notify
+    from . import leadsheet, notify, outreach
 
     log = logging.getLogger("licmon")
     day = args.date or datetime.now(timezone.utc).date()
@@ -200,16 +207,20 @@ def cmd_email(args) -> int:
         if out == repo or repo in out.parents:
             raise SystemExit("preview folder must be outside the repository (lead data)")
     with db.connect() as conn:
+        db.init_schema(conn)  # columns added since the last run may be missing
         data = notify.load_daily(conn, day)
     sender, recipients = notify.settings_from_env()
     leads = data["leads"]
     tier_a = sum(1 for lead in leads if lead.get("priority") == "A")
+    planned = (len(outreach.build_plan(leads)) if leadsheet.contact_checked(
+        leads + list(data.get("open_leads") or [])) else 0)
     if args.preview:
         msg = notify.compose(data, day, sender=sender or "sender@example.com",
                              recipients=recipients or ["owner@example.com"])
         paths = notify.write_preview(msg, str(out))
-        print(f"preview for {day}: {len(leads)} leads ({tier_a} tier A), "
-              f"{len(paths)} files -> {out}", file=sys.stderr)
+        print(f"preview for {day}: {len(leads)} leads ({tier_a} tier A), plan {planned} "
+              f"venues, {len(paths)} files -> {out} (holds lead data: keep it out of the "
+              "repo)", file=sys.stderr)
         return 0
     msg = notify.compose(data, day, sender=sender, recipients=recipients)
     try:
@@ -217,8 +228,8 @@ def cmd_email(args) -> int:
     except notify.NotifyError as exc:
         log.error("%s", exc)  # NotifyError text is "email failed (<ErrorType>)"
         return 1
-    log.info("email sent: %d leads (%d tier A) to %d recipient(s)",
-             len(leads), tier_a, len(recipients))
+    log.info("email sent: %d leads (%d tier A), plan %d venues, to %d recipient(s)",
+             len(leads), tier_a, planned, len(recipients))
     return 0
 
 

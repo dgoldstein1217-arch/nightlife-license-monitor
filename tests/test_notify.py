@@ -67,9 +67,10 @@ def fake_xlsx(monkeypatch):
     """Pin the workbook bytes so tests never depend on the real builder."""
     calls = {}
 
-    def _build(rows, open_rows=None):
+    def _build(rows, open_rows=None, outcomes=None):
         calls["rows"] = list(rows)
         calls["open_rows"] = open_rows
+        calls["outcomes"] = outcomes
         return b"PK-fake"
 
     monkeypatch.setattr(leadsheet, "build_workbook", _build)
@@ -475,7 +476,11 @@ def test_contact_counts_only_once_the_lookup_has_run(fake_xlsx):
     assert "Waiting on contact: 2, on the Waiting on contact tab." in plain
     assert "Waiting on contact: 2" in html_body
     for body in (plain, html_body):
-        assert "555" not in body and "ZEBRA" not in body.upper()
+        # Only plan venues are named (the newly reachable one). Waiting
+        # venues and filing phones never reach the body.
+        assert "ZEBRA FAKE LOUNGE 3" not in body.upper()
+        assert "ZEBRA FAKE LOUNGE 2" not in body.upper()  # reachable, nothing new
+        assert "555-010" not in body and "Zebra Stripe Way" not in body
 
 
 def test_email_counts_instagram_found_by_search(fake_xlsx):
@@ -491,3 +496,95 @@ def test_email_counts_instagram_found_by_search(fake_xlsx):
     leads[0]["instagram_by_search"] = False
     plain, _ = bodies(notify.compose(data, DAY, sender="s", recipients=["o"]))
     assert "found by search" not in plain  # the line shows once the search found one
+
+
+# --- the outreach plan in the body (owner approved: names and openers go
+# only to LEADS_EMAIL_TO; logs stay counts-only) ---
+
+def plan_data():
+    from test_outreach import plan_row
+
+    leads = [
+        plan_row(1, contact_person="Jane Q Tester", platforms=["SevenRooms"],
+                 current_platform="SevenRooms", phone="(512) 555-0199",
+                 address="1 Zebra Stripe Way"),
+        plan_row(2, business_name="Quokka Fake Lounge", contact_status="waiting",
+                 outreach_method="Wait: no verified contact yet", contact_url=None,
+                 contact_url_text=None),
+        plan_row(3, business_name="Okapi Fake Lounge", review_status="contacted"),
+    ]
+    return {"leads": leads, "open_leads": [], "sources": [ok_source()],
+            "outcomes": [("contacted", "Instagram DM", 2), ("replied", "Instagram DM", 1)]}
+
+
+def test_email_body_has_the_plan_in_both_parts(fake_xlsx):
+    from licmon import outreach
+
+    msg = notify.compose(plan_data(), DAY, sender="s", recipients=["o"])
+    plain, html_body = bodies(msg)
+    [item] = outreach.build_plan(plan_data()["leads"])
+    assert "Today's plan: 1 new venue to reach, best first. Send each one yourself." in plain
+    assert "1. Zebra Fake Lounge, Austin | Approved | Hot, tier A" in plain
+    assert ("Why reach out:\n- License approved, not open yet: pitch before launch\n"
+            "- Lounge: tables, bottle service and the door\n"
+            "- Uses SevenRooms: switch pitch") in plain
+    assert "How: Instagram DM: @zebrafakelounge (Verified 90)" in plain
+    assert "Second best way: Call" in plain
+    assert "Contact person on the filing: Jane Q Tester" in plain
+    assert "Opener (DM):\n\n" + item["opener"] in plain
+    assert item["opener"].startswith("Hey Jane,")
+    # counts block first, then the plan, then source health
+    assert plain.index("By market") < plain.index("Today's plan") < plain.index("All 1 source")
+    assert "Outreach results, last 30 days: contacted 2, replied 1, won 0, wrong contact 0" \
+        in plain
+    assert "Instagram DM: contacted 2, replied 1" in plain
+    assert "<b>1. Zebra Fake Lounge, Austin | Approved | Hot, tier A</b>" in html_body
+    assert '<a href="https://www.instagram.com/zebrafakelounge/">@zebrafakelounge</a>' \
+        in html_body
+    assert "<li>Uses SevenRooms: switch pitch</li>" in html_body
+    assert "Hey Jane,\n\nCongrats on the upcoming opening of Zebra Fake Lounge." in html_body
+    assert "Outreach results, last 30 days" in html_body
+    for body in (plain, html_body):
+        assert "Quokka" not in body and "Okapi" not in body  # not in the plan
+        assert "555-0199" not in body and "Zebra Stripe Way" not in body  # sheet only
+        assert "—" not in body
+    plan_part = plain[plain.index("Today's plan"):plain.index("All 1 source")]
+    assert ";" not in plan_part
+
+
+def test_email_empty_plan_says_so(fake_xlsx):
+    data = plan_data()
+    data["leads"] = data["leads"][1:]
+    plain, html_body = bodies(notify.compose(data, DAY, sender="s", recipients=["o"]))
+    assert "No new reachable venues today." in plain
+    assert "No new reachable venues today." in html_body
+    assert "Today's plan:" not in plain
+
+
+def test_no_plan_section_before_the_contact_lookup_runs(fake_xlsx):
+    plain, html_body = bodies(notify.compose(sample_data(), DAY, sender="s",
+                                             recipients=["o"]))
+    assert "plan" not in plain.lower() and "reachable venues" not in plain
+    assert "href" not in html_body
+
+
+def test_cli_email_logs_counts_only_with_a_plan(monkeypatch, caplog):
+    from licmon import cli
+    from test_attio_slack import _NullConn
+
+    for var, value in (("SMTP_HOST", "smtp.example.invalid"), ("SMTP_USERNAME", "u"),
+                       ("SMTP_PASSWORD", "p"), ("LEADS_EMAIL_TO", "owner@example.invalid")):
+        monkeypatch.setenv(var, value)
+    monkeypatch.setattr(cli.db, "connect", lambda: _NullConn())
+    monkeypatch.setattr(cli.db, "init_schema", lambda conn: None)
+    monkeypatch.setattr(notify, "load_daily", lambda conn, day: plan_data())
+    sent = []
+    monkeypatch.setattr(notify, "send", sent.append)
+    with caplog.at_level("INFO", logger="licmon"):
+        assert cli.main(["email"]) == 0
+    assert "email sent: 3 leads (3 tier A), plan 1 venues, to 1 recipient(s)" in caplog.text
+    plain, _ = bodies(sent[0])
+    assert "Zebra Fake Lounge" in plain  # the email itself has the plan
+    for secret in ("Zebra", "Quokka", "Okapi", "zebrafakelounge", "Jane", "555",
+                   "owner@example.invalid"):
+        assert secret not in caplog.text

@@ -1,13 +1,19 @@
-"""Daily lead email: a short counts-only note plus the full spreadsheet.
+"""Daily lead email: counts, today's outreach plan, and the full spreadsheet.
 
-The email body never contains lead data: no names, addresses, phones, links
-to records, or record ids. All detail lives ONLY in the attached Excel
-workbook built by ``licmon.leadsheet`` (New, Existing venues, All open, one
-tab per state).
+The body has the counts block (leads by priority and market, contact and
+outreach result counts, source health) and, once the contact lookup has
+run, the day's attack plan (outreach.build_plan): one block per venue with
+its name, city, stage, tier, why reach out, how (best way, the contact and
+its confidence, second best way) and a copy-ready opener. The owner
+approved venue names and contacts in the body because it goes only to
+LEADS_EMAIL_TO, his own address. Every other detail (addresses, filing
+phones, record links) stays in the attached Excel workbook built by
+``licmon.leadsheet``.
 
 Public Actions logs must never contain lead data, email addresses or SMTP
 credentials. This module logs nothing with values in it: senders report only
-counts and "email sent" / "email failed (<ErrorType>)".
+counts and "email sent" / "email failed (<ErrorType>)". A preview
+(``licmon email --preview DIR``) holds lead data: write it outside the repo.
 """
 
 from __future__ import annotations
@@ -55,7 +61,10 @@ def load_daily(conn, day: date) -> dict:
         srows = cur.fetchall()
         snames = [d.name for d in cur.description]
     sources = [dict(zip(snames, r)) for r in srows]
-    return {"leads": leads, "open_leads": open_leads, "sources": sources}
+    from . import feedback
+
+    return {"leads": leads, "open_leads": open_leads, "sources": sources,
+            "outcomes": feedback.results(conn, cutoff)}
 
 
 # ---------------------------------------------------------------------------
@@ -153,14 +162,72 @@ def _contact_lines(leads: list[dict], open_leads: list[dict]) -> list[str]:
     return lines
 
 
+def _plan_text(plan: list[dict]) -> list[str]:
+    """The plan as plain text lines, one block per venue."""
+    from . import outreach
+
+    if not plan:
+        return [outreach.EMPTY_PLAN]
+    unit = "venue" if len(plan) == 1 else "venues"
+    lines = [f"{outreach.PLAN_TITLE}: {len(plan)} new {unit} to reach, best first. "
+             "Send each one yourself."]
+    for item in plan:
+        lines += ["", "-" * 40, f"{item['order']}. {item['header']}", "Why reach out:"]
+        lines += [f"- {b}" for b in item["why"]]
+        lines.append(f"How: {item['how']}")
+        if item["second"]:
+            lines.append(f"Second best way: {item['second']}")
+        if item["contact_person"]:
+            lines.append(f"Contact person on the filing: {item['contact_person']}")
+        lines += [f"Opener ({outreach.CHANNEL_TEXT[item['channel']]}):", "", item["opener"]]
+    return lines
+
+
+def _plan_html(plan: list[dict]) -> str:
+    """The plan as HTML: the contact is a link, the opener a copyable block."""
+    from . import outreach
+
+    e = html.escape
+    if not plan:
+        return f"<p><b>{e(outreach.EMPTY_PLAN)}</b></p>"
+    unit = "venue" if len(plan) == 1 else "venues"
+    out = [f"<h3 style=\"margin:24px 0 8px;\">{e(outreach.PLAN_TITLE)}: {len(plan)} new "
+           f"{unit} to reach</h3><p>Best first. Send each one yourself.</p>"]
+    for item in plan:
+        contact = e(item["contact"])
+        url = item.get("contact_url") or ""
+        if url.startswith(("https://", "http://", "mailto:", "tel:")):
+            contact = f'<a href="{e(url, quote=True)}">{contact}</a>'
+        how = e(item["method"]) + (f": {contact}" if item["contact"] else "")
+        if item["confidence"]:
+            how += f" ({e(item['confidence'])})"
+        out.append(
+            '<div style="border-top:1px solid #ddd;padding:12px 0;">'
+            f"<p style=\"margin:0 0 6px;\"><b>{item['order']}. {e(item['header'])}</b></p>"
+            "<p style=\"margin:0;\">Why reach out:</p><ul style=\"margin:4px 0 8px;\">"
+            + "".join(f"<li>{e(b)}</li>" for b in item["why"]) + "</ul>"
+            f"<p style=\"margin:0;\">How: {how}"
+            + (f"<br>Second best way: {e(item['second'])}" if item["second"] else "")
+            + (f"<br>Contact person on the filing: {e(item['contact_person'])}"
+               if item["contact_person"] else "")
+            + f"</p><p style=\"margin:8px 0 4px;\">Opener "
+              f"({e(outreach.CHANNEL_TEXT[item['channel']])}):</p>"
+            '<pre style="white-space:pre-wrap;font-family:Arial,Helvetica,sans-serif;'
+            'font-size:14px;background:#f4f4f5;padding:10px;margin:0;">'
+            f"{e(item['opener'])}</pre></div>")
+    return "".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Compose
 # ---------------------------------------------------------------------------
 
 def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> EmailMessage:
-    """Build the short daily email. Pure apart from the XLSX builder call:
-    no database, no network. The body holds aggregates only."""
-    from . import leadsheet  # lazy: keeps cli -> notify -> leadsheet one-way
+    """Build the daily email. Pure apart from the XLSX builder call: no
+    database, no network. The body holds counts and, once the contact
+    lookup has run, the day's outreach plan (venue names, contacts and
+    openers; the email goes only to the owner)."""
+    from . import feedback, leadsheet, outreach  # lazy: keeps cli -> notify one-way
 
     leads = list(data.get("leads") or [])
     sources = list(data.get("sources") or [])
@@ -174,6 +241,10 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     existing_line = (f"Existing venues (new owner or adding a permit): {count_existing}, "
                      "on the Existing venues tab." if count_existing else None)
     contact_lines = _contact_lines(leads, list(data.get("open_leads") or []))
+    contact_lines += feedback.results_lines(list(data.get("outcomes") or []))
+    with_plan = leadsheet.contact_checked(leads + list(data.get("open_leads") or []))
+    plan = outreach.build_plan(leads) if with_plan else []
+    plan_text = [""] + _plan_text(plan) if with_plan else []
     failed = sum(1 for s in sources if s.get("status") == "failed")
 
     if total == 0:
@@ -190,7 +261,8 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
 
     # ---- plain text ----
     if total == 0:
-        text_lines = ["No new leads today.", "", source_line, "", FOOTER]
+        text_lines = ["No new leads today.", *(["", *contact_lines] if contact_lines else []),
+                      *plan_text, "", source_line, "", FOOTER]
     else:
         market_text = ", ".join(f"{name} {n}" for name, n in _markets_sorted(leads))
         text_lines = [
@@ -204,6 +276,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
             *contact_lines,
             "",
             f"By market: {market_text}",
+            *plan_text,
             "",
             source_line,
             "",
@@ -217,6 +290,8 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
          'font-size:14px;line-height:1.5;color:#222;max-width:640px;">']
     if total == 0:
         h.append(f"<p>{e('No new leads today.')}</p>")
+        if contact_lines:
+            h.append("<p>" + "<br>".join(e(line) for line in contact_lines) + "</p>")
     else:
         h.append(f"<p>{e(text_lines[0])}</p>")
         h.append(f"<p>{e(f'Hot (best fit, call first): {count_hot}')}<br>"
@@ -226,6 +301,8 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
                  + (f"<br>{e(existing_line)}" if existing_line else "")
                  + "".join(f"<br>{e(line)}" for line in contact_lines) + "</p>")
         h.append(f"<p>{e(f'By market: {market_text}')}</p>")
+    if with_plan:
+        h.append(_plan_html(plan))
     h.append(f"<p>{e(source_line)}</p>")
     h.append(f"<p>{e(FOOTER)}</p>")
     h.append("</body></html>")
@@ -238,7 +315,8 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     msg.set_content(plain)
     msg.add_alternative(body_html, subtype="html")
     if total:
-        payload = leadsheet.build_workbook(leads, data.get("open_leads"))
+        payload = leadsheet.build_workbook(leads, data.get("open_leads"),
+                                           outcomes=data.get("outcomes"))
         maintype, _, subtype = leadsheet.XLSX_MIME.partition("/")
         if not maintype or not subtype:
             maintype, subtype = "application", "octet-stream"
