@@ -77,6 +77,44 @@ METRO_CITIES: dict[str, dict[str, set[str]]] = {
 }
 
 
+# Short names venues use for their own metro, mostly in Instagram handles and
+# bios ("fakelounge.atx", "Chicago's newest lounge"). Lower case, no spaces.
+# The contact lookup's Instagram search counts one as a city match. Two-letter
+# ones ("la", "sf") only count as a whole handle part, never in free text.
+METRO_ALIASES: dict[str, set[str]] = {
+    "New York City": {"nyc", "ny", "newyork", "newyorkcity", "manhattan", "brooklyn",
+                      "bk", "queens", "bronx", "statenisland"},
+    "NYC Suburbs (Long Island / Hudson Valley)": {"li", "longisland", "westchester",
+                                                  "hudsonvalley"},
+    "Chicago": {"chi", "chitown", "chicago", "chgo"},
+    "Dallas-Fort Worth": {"dfw", "dallas", "dtx", "fortworth", "ftw"},
+    "Houston": {"htx", "hou", "houston", "htown"},
+    "Austin": {"atx", "austin"},
+    "San Antonio": {"satx", "sa", "sanantonio"},
+    "Los Angeles / Orange County": {"la", "dtla", "losangeles", "oc", "orangecounty",
+                                    "hollywood", "weho"},
+    "San Francisco Bay Area": {"sf", "sanfrancisco", "bayarea", "oakland", "sj",
+                               "sanjose", "oak"},
+    "San Diego": {"sd", "sandiego"},
+    "Seattle-Tacoma-Bellevue": {"sea", "seattle", "tacoma", "bellevue"},
+    "Miami-Fort Lauderdale-West Palm Beach": {"mia", "miami", "305", "ftl", "ftlaud",
+                                              "fortlauderdale", "wpb", "southbeach"},
+    "Orlando": {"orl", "orlando"},
+    "Tampa-St. Petersburg": {"tpa", "tampa", "stpete", "tampabay"},
+    "Jacksonville": {"jax", "jacksonville"},
+}
+
+
+def city_aliases(city: str | None, metro: str | None) -> set[str]:
+    """Lower-case, space-free names for a filing's city and metro: the city
+    itself ("austin", "fortworth") plus METRO_ALIASES for the metro."""
+    out = set(METRO_ALIASES.get(metro or "", set()))
+    flat = "".join(ch for ch in (city or "").lower() if ch.isalnum())
+    if flat:
+        out.add(flat)
+    return out
+
+
 def _norm_county(county: str | None) -> str:
     text = (county or "").upper().replace(" COUNTY", "").strip()
     text = text.replace("DU PAGE", "DUPAGE")

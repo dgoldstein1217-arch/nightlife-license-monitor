@@ -390,7 +390,8 @@ def cmd_attio_sync(args) -> int:
 
 def cmd_enrich(args) -> int:
     """Look up and verify contact details for eligible venues (contact.py).
-    Never contacts a business. Skips itself without GOOGLE_PLACES_API_KEY.
+    Never contacts a business. Skips itself without GOOGLE_PLACES_API_KEY;
+    the Instagram web search runs only with BRAVE_SEARCH_API_KEY.
     A failed lookup logs "enrich FAILED <lookup> failed (<status>)" and the
     run stays green. Logs counts only: Actions logs are public."""
     from . import contact
@@ -402,16 +403,21 @@ def cmd_enrich(args) -> int:
     with db.connect() as conn:
         db.init_schema(conn)  # the contact_checks table may not exist yet
     instagram = contact.Instagram() if contact.ig_configured() else None
+    search = contact.web_search()  # None without BRAVE_SEARCH_API_KEY
     with db.connect() as conn:
         counts = contact.run(conn, places=contact.Places(), website=contact.Website(),
-                             instagram=instagram,
+                             instagram=instagram, search=search,
                              cap=args.cap if args.cap is not None else contact.daily_cap())
+    searched = ("on: searches %d, handles found %d, likely %d" % (
+        counts.get("searches", 0), counts.get("search_found", 0),
+        counts.get("search_likely", 0)) if counts.get("instagram_search") else "off")
     log.info("enrich: checked %d (new %d, rechecks %d, backlog %d); reachable %d, newly "
              "reachable %d, waiting %d, gave up %d; over daily cap %d; lookups failed %d; "
-             "instagram %s", counts["checked"], counts["new"], counts["recheck"],
-             counts["backlog"], counts["reachable"], counts["newly_reachable"],
-             counts["waiting"], counts["gave_up"], counts["over_cap"], counts["failed"],
-             "on" if counts["instagram"] else "off")
+             "instagram %s; instagram search %s", counts["checked"], counts["new"],
+             counts["recheck"], counts["backlog"], counts["reachable"],
+             counts["newly_reachable"], counts["waiting"], counts["gave_up"],
+             counts["over_cap"], counts["failed"], "on" if counts["instagram"] else "off",
+             searched)
     return 0
 
 

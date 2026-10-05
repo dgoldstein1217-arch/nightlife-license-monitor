@@ -597,3 +597,383 @@ def test_enrich_run_waiting_then_newly_reachable(pg):
     with pg.cursor() as cur:
         cur.execute("SELECT status, attempts FROM contact_checks ORDER BY venue_key")
         assert cur.fetchall() == [("reachable", 1), ("reachable", 2)]
+
+
+# --- Instagram found by web search (results only; instagram.com is never opened) ---
+
+def hit(handle_or_url, title=None, desc=""):
+    url = (handle_or_url if "/" in handle_or_url
+           else f"https://www.instagram.com/{handle_or_url}/")
+    return contact.SearchHit(url, title if title is not None else
+                             f"Zebra Fake Lounge (@{handle_or_url}) • Instagram photos "
+                             "and videos", desc)
+
+
+class FakeSearch:
+    def __init__(self, hits=None, error=None):
+        self.hits = hits or []
+        self.error = error
+        self.queries = []
+
+    def search(self, query):
+        self.queries.append(query)
+        if self.error:
+            raise self.error
+        return self.hits
+
+
+def search_venue(**kw):
+    return venue(**{"market": "Austin", **kw})
+
+
+def test_search_profile_handle_keeps_profiles_only():
+    keep = {"https://www.instagram.com/zebrafake.atx/": "zebrafake.atx",
+            "https://instagram.com/ZebraFake_ATX?hl=en": "zebrafake_atx",
+            "https://m.instagram.com/zebrafake/": "zebrafake"}
+    for url, handle in keep.items():
+        assert contact.search_profile_handle(url) == handle
+    for url in ("https://www.instagram.com/p/AbC123/", "https://www.instagram.com/reel/XyZ/",
+                "https://www.instagram.com/reels/XyZ/", "https://www.instagram.com/explore/",
+                "https://www.instagram.com/stories/zebrafake/123/",
+                "https://www.instagram.com/tv/AbC/", "https://www.instagram.com/accounts/login/",
+                "https://www.instagram.com/zebrafake/p/AbC123/",
+                "https://www.instagram.com/zebrafake/reel/XyZ/",
+                "https://www.instagram.com/instagram/", "https://www.instagram.com/creators/",
+                "https://www.instagram.com/", "https://www.facebook.com/zebrafake/",
+                "https://zebrafake.test/instagram.com/zebrafake", "", None):
+        assert contact.search_profile_handle(url) is None, url
+
+
+def test_profile_name_from_result_title():
+    assert contact.profile_name(
+        "Zebra Fake Lounge (@zebrafake.atx) • Instagram photos and videos") == \
+        "Zebra Fake Lounge"
+    assert contact.profile_name("Zebra &amp; Fake (@zf) | Instagram") == "Zebra & Fake"
+    assert contact.profile_name("@zebrafake • Instagram photos and videos") is None
+    assert contact.profile_name("Zebra Fake on Instagram: \"Friday\"") is None
+
+
+def test_instagram_query_quotes_the_name_without_entity_words():
+    assert contact.instagram_query(search_venue()) == \
+        'site:instagram.com "Zebra Fake Lounge" Austin'
+    row = search_venue(business_name=None, company='Zebra "Fake" Holdings, L.L.C.')
+    assert contact.instagram_query(row) == 'site:instagram.com "Zebra Fake Holdings" Austin'
+    assert contact.instagram_query(search_venue(business_name="Fake Bar Inc.", city=None)) == \
+        'site:instagram.com "Fake Bar"'
+    assert contact.instagram_query(search_venue(business_name=None, company=None)) is None
+
+
+def test_search_name_match_requires_every_distinctive_word():
+    m = contact.search_name_match
+    # Display name: all distinctive words, generic ones (Lounge) not needed.
+    assert m("Zebra Fake Lounge", "The Zebra Fake", "zz")
+    assert m("Zebra Fake Lounge LLC", "ZEBRA FAKE BAR & KITCHEN", "zz")
+    assert not m("Zebra Fake Lounge", "Zebra Lounge", "zz")  # Fake missing
+    # Handle: the distinctive words inside it, dots and underscores removed.
+    assert m("Fake Lounge", None, "fakelounge.atx")
+    assert m("Zebra Fake Lounge", None, "the_zebra.fake")
+    assert not m("Zebra Fake Lounge", None, "zebralounge.atx")
+    # Very short names count in the display name only.
+    assert m("Bo Bar", "Bo", "bobar.atx") and not m("Bo Bar", None, "bobar.atx")
+    # Only generic words: the whole name, exactly.
+    assert m("The Lounge", "Lounge", "x") and m("Kitchen & Bar", None, "kitchenbar.atx")
+    assert not m("The Lounge", "Zebra Lounge", "zebralounge")
+    assert not m("Kitchen & Bar", "Fake Kitchen and Bar", "fakekitchenbar")
+    assert not m(None, "Zebra", "zebra") and not m("LLC", "LLC", "llc")
+
+
+def test_search_city_match_uses_city_and_metro_aliases():
+    row = search_venue()
+    c = contact.search_city_match
+    assert c(row, "Zebra Fake (@zf) • Instagram", "Cocktails in Austin, TX", "zf")
+    assert c(row, "Zebra Fake ATX (@zf) • Instagram", "", "zf")
+    assert c(row, "", "", "zebrafake.atx") and c(row, "", "", "zebrafake_austin")
+    assert c(row, "", "", "zebrafakeatx") and c(row, "", "", "atxzebrafake")
+    assert not c(row, "Zebra Fake (@zf)", "Cocktails in Dallas", "zebrafake.dfw")
+    assert not c(row, "", "", "zebrafake")
+    chi = search_venue(city="Chicago", market="Chicago", state="IL")
+    assert c(chi, "", "", "zebrafake.chi")
+    assert not c(chi, "", "Tai chi and tea", "zebrafake")  # "chi" counts in handles only
+    assert c(chi, "", "Best bar in Chi-town? Chicago", "zebrafake")
+    la = search_venue(city="Los Angeles", market="Los Angeles / Orange County", state="CA")
+    assert c(la, "", "", "zebrafake.la") and not c(la, "", "la mejor", "zebrafake")
+    assert c(la, "", "Now open in DTLA", "zebrafake")
+
+
+def test_search_address_match_in_snippet():
+    row = search_venue()
+    assert contact._names_address("Now open at 100 Fake St, Austin", row)
+    assert contact._names_address("Austin TX 78701", row)
+    assert not contact._names_address("100 Other St, Austin", row)
+    assert not contact._names_address("1,234 followers", row)
+
+
+def search_result(hits, row=None):
+    return contact.instagram_from_search(row or search_venue(), hits)
+
+
+def test_search_labels_name_address_city_and_name_only():
+    [ch] = search_result([hit("zebrafakelounge", desc="Cocktails. 100 Fake St")])
+    assert ch.kind == "instagram_search" and ch.value == "@zebrafakelounge"
+    assert ch.url == "https://www.instagram.com/zebrafakelounge/"
+    assert ch.signals == ["ig_search_name", "ig_search_address"]
+    assert (ch.score, ch.label) == (55, "Likely")
+    assert contact.reason(ch) == "Found by web search: name and address match"
+
+    [ch] = search_result([hit("zebrafakelounge", desc="Austin's newest lounge")])
+    assert (ch.score, ch.label) == (50, "Likely")
+    assert contact.reason(ch) == "Found by web search: name and city match"
+
+    [ch] = search_result([hit("zebrafake.atx", desc="100 Fake St, Austin TX 78701")])
+    assert (ch.score, ch.label) == (70, "Likely")  # never Verified from search alone
+    assert contact.reason(ch) == "Found by web search: name, address and city match"
+    full = contact.score_channel(Channel("instagram_search", "@x", signals=[
+        "ig_search_name", "ig_search_address", "ig_search_city"] * 2))
+    assert full.score == contact.CAP_SEARCH == 74
+
+    [ch] = search_result([hit("zebrafakelounge", desc="Cocktails and DJs")])
+    assert (ch.score, ch.label) == (35, "Unverified") and not contact.reachable(ch)
+    assert contact.reason(ch) == "Found by web search: name match only; check by hand"
+
+    # A profile whose name does not match never counts, whatever else it says.
+    assert search_result([hit("quokkafake.atx", title="Quokka Fake (@quokkafake.atx)",
+                              desc="100 Fake St, Austin 78701")]) == []
+
+
+def test_search_ambiguous_handles_are_unverified_and_both_shown():
+    hits = [hit("zebrafakelounge", desc="Austin"), hit("zebrafake.atx", desc="")]
+    chans = search_result(hits)
+    assert [c.value for c in chans] == ["@zebrafakelounge", "@zebrafake.atx"]
+    assert all("ig_search_ambiguous" in c.signals and c.label == "Unverified"
+               for c in chans)
+    assert contact.reason(chans[0]).startswith("Found by web search: more than one account")
+    # A clearly better match wins; duplicates of one handle are one account.
+    hits = [hit("zebrafakelounge", desc="100 Fake St, Austin"),
+            hit("zebrafakelounge", desc=""),
+            hit("https://www.instagram.com/zebrafakelounge/?hl=en"),
+            hit("zebrafake.dfw", title="Zebra Fake (@zebrafake.dfw)", desc="Dallas")]
+    [ch] = search_result(hits)
+    assert ch.value == "@zebrafakelounge" and ch.label == "Likely"
+
+
+def test_check_venue_searches_only_without_a_good_website_instagram():
+    likely = [hit("zebrafakelounge", desc="Austin")]
+    # The website links an Instagram (Verified): no search.
+    search = FakeSearch(likely)
+    result = contact.check_venue(search_venue(), FakePlaces([place()]),
+                                 FakeWebsite(site_links()), None, TODAY, search=search)
+    assert search.queries == [] and not result.searched
+    # No Google listing at all: the search is the only way to find it.
+    search = FakeSearch(likely)
+    result = contact.check_venue(search_venue(), FakePlaces([]), None, None, TODAY,
+                                 search=search)
+    assert search.queries == ['site:instagram.com "Zebra Fake Lounge" Austin']
+    assert result.searched and result.reachable
+    assert (result.method, result.second) == ("Instagram DM (found by search)", None)
+    assert result.best.url == "https://www.instagram.com/zebrafakelounge/"
+    assert result.reason == "Found by web search: name and city match"
+    # The website's Instagram is only Unverified (listing under another
+    # name): search too, and the website-derived channels are unchanged.
+    search = FakeSearch(likely)
+    result = contact.check_venue(search_venue(), FakePlaces([place(name="Old Quokka Saloon")]),
+                                 FakeWebsite(site_links(emails=[], facebook=[])), None, TODAY,
+                                 search=search)
+    assert len(search.queries) == 1
+    ch = by_kind(result)
+    assert ch["phone"].score <= 49 and ch["instagram"].score <= 49
+    assert ch["instagram_search"].label == "Likely"
+    assert result.method == "Instagram DM (found by search)"
+
+
+def test_check_venue_without_search_is_unchanged():
+    args = (search_venue(), FakePlaces([place()]), FakeWebsite(site_links()), None, TODAY)
+    a, b = contact.check_venue(*args), contact.check_venue(*args, search=None)
+    assert [(c.kind, c.score) for c in a.channels] == [(c.kind, c.score) for c in b.channels]
+    assert not any(c.kind == "instagram_search" for c in a.channels) and not a.searched
+
+
+def test_search_failure_is_noted_not_raised():
+    bad = contact.ContactError("instagram search", "HTTP 401", fatal=True)
+    result = contact.check_venue(search_venue(), FakePlaces([]), None, None, TODAY,
+                                 search=FakeSearch(error=bad))
+    assert result.lookups_failed == ["instagram search failed (HTTP 401)"]
+    assert result.fatal_lookups == {"instagram search"} and not result.reachable
+
+
+def test_method_order_puts_search_after_email():
+    assert [m for m, *_ in contact.METHOD_RULES] == [
+        "Instagram DM", "Call", "Facebook message", "Email",
+        "Instagram DM (found by search)", "Instagram DM (no recent posts seen)",
+        "Website contact form", "Call (Google does not say it is open)"]
+    # A Likely search find with a Verified email: Email first, then the DM.
+    result = contact.check_venue(
+        search_venue(), FakePlaces([place(phone=None)]),
+        FakeWebsite(site_links(instagram=[], facebook=[])), None, TODAY,
+        search=FakeSearch([hit("zebrafakelounge", desc="Austin")]))
+    assert (result.method, result.second) == ("Email", "Instagram DM (found by search)")
+
+
+# --- the Brave client (fake session and clock; never the network) ---
+
+def test_brave_request_shape_spacing_and_errors_hide_key_and_query():
+    body = {"web": {"results": [
+        {"url": "https://www.instagram.com/zebrafakelounge/",
+         "title": "Zebra Fake Lounge (@zebrafakelounge)",
+         "description": "<strong>Zebra</strong> Fake &amp; friends"},
+        {"title": "no url"}, "junk"]}}
+    session = FakeSession(FakeResp(200, body), FakeResp(200, {}))
+    clock = {"t": 100.0}
+    slept = []
+
+    def sleep(s):
+        slept.append(round(s, 2))
+        clock["t"] += s
+
+    brave = contact.BraveSearch(key="secret-brave-key",
+                                api=contact.Api(session, sleep=sleep),
+                                clock=lambda: clock["t"], sleep=sleep)
+    [h] = brave.search('site:instagram.com "Zebra Fake Lounge" Austin')
+    assert h.url.endswith("/zebrafakelounge/") and "Zebra" in h.description
+    call = session.calls[0]
+    assert call["method"] == "GET" and call["url"] == contact.SEARCH_URL
+    assert call["params"] == {"q": 'site:instagram.com "Zebra Fake Lounge" Austin',
+                              "count": 10, "country": "us"}
+    assert call["headers"] == {"X-Subscription-Token": "secret-brave-key",
+                               "Accept": "application/json"}
+    assert slept == []
+    clock["t"] += 0.3
+    assert brave.search("q2") == []
+    assert slept == [0.8]  # spaced 1.1 s apart
+
+    for status, fatal in ((401, True), (403, True), (402, True), (422, False)):
+        brave.api.session = FakeSession(FakeResp(status, {"error": "Zebra Fake"}))
+        with pytest.raises(contact.ContactError) as err:
+            brave.search('site:instagram.com "Zebra Fake Lounge" Austin')
+        assert str(err.value) == f"instagram search failed (HTTP {status})"
+        assert err.value.fatal is fatal
+        assert "secret-brave-key" not in str(err.value) and "Zebra" not in str(err.value)
+    # 429 is retried first, then fatal for the day.
+    brave.api.session = FakeSession(FakeResp(429), FakeResp(429), FakeResp(429))
+    with pytest.raises(contact.ContactError) as err:
+        brave.search("q")
+    assert err.value.fatal and len(brave.api.session.calls) == 3
+
+
+def test_web_search_is_off_without_the_key(monkeypatch):
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    assert not contact.search_configured() and contact.web_search() is None
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "  ")
+    assert contact.web_search() is None
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "k")
+    assert isinstance(contact.web_search(), contact.BraveSearch)
+
+
+# --- run(): a fatal search error stops searching, the run goes on, logs stay clean ---
+
+class _Cur:
+    description = [type("Col", (), {"name": n}) for n in ("venue_key", "status", "first_checked_at",
+                                  "became_reachable_at", "newly_reachable_on", "gave_up_at",
+                                  "next_check_at")]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, *a, **kw):
+        pass
+
+    def fetchall(self):
+        return []
+
+
+class _Conn:
+    def cursor(self):
+        return _Cur()
+
+    def commit(self):
+        pass
+
+
+def test_run_fatal_search_stops_searching_and_logs_counts_only(monkeypatch, caplog):
+    from licmon import leadsheet
+
+    rows = [search_venue(venue_key=f"k{i}", business_name=f"Zebra Fake {n}")
+            for i, n in enumerate(("One", "Two", "Three"))]
+    monkeypatch.setattr(leadsheet, "load_rows",
+                        lambda conn, day, **kw: rows if day is not None else [])
+    saved = []
+    monkeypatch.setattr(contact, "save", lambda conn, key, result, state, now:
+                        saved.append((key, result)))
+    bad = contact.ContactError("instagram search", "HTTP 401", fatal=True)
+    search = FakeSearch(error=bad)
+    places = FakePlaces([])
+    with caplog.at_level("DEBUG"):
+        counts = contact.run(_Conn(), places=places, now=NOW, cap=10, search=search)
+    assert len(search.queries) == 1  # stopped after the first 401
+    assert len(places.queries) == 3 and len(saved) == 3  # the run went on
+    assert (counts["checked"], counts["searches"], counts["instagram_search"]) == (3, 1, 1)
+    assert "enrich FAILED instagram search failed (HTTP 401) x1" in caplog.text
+    for secret in ("Zebra", "Fake", "site:instagram", "Austin", "zebrafake"):
+        assert secret not in caplog.text
+
+
+def test_run_counts_search_finds(monkeypatch, caplog):
+    from licmon import leadsheet
+
+    rows = [search_venue(venue_key="k1")]
+    monkeypatch.setattr(leadsheet, "load_rows",
+                        lambda conn, day, **kw: rows if day is not None else [])
+    saved = []
+    monkeypatch.setattr(contact, "save", lambda conn, key, result, state, now:
+                        saved.append(state.status))
+    search = FakeSearch([hit("zebrafakelounge", desc="Austin"),
+                         hit("zebrafake.dfw", title="Zebra Fake Lounge (@zebrafake.dfw)",
+                             desc="")])
+    with caplog.at_level("DEBUG"):
+        counts = contact.run(_Conn(), places=FakePlaces([]), now=NOW, cap=10, search=search)
+    assert (counts["searches"], counts["search_found"], counts["search_likely"]) == (1, 1, 1)
+    assert saved == ["reachable"]
+    assert "zebrafake" not in caplog.text.lower()
+
+
+def test_cli_enrich_logs_instagram_search_on_off(monkeypatch, caplog):
+    monkeypatch.setenv("GOOGLE_PLACES_API_KEY", "secret-places-key")
+    monkeypatch.delenv("IG_GRAPH_ACCESS_TOKEN", raising=False)
+
+    class NullConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(cli.db, "connect", lambda: NullConn())
+    monkeypatch.setattr(cli.db, "init_schema", lambda conn: None)
+    seen = {}
+
+    def fake_run(conn, **kw):
+        seen.update(kw)
+        on = kw["search"] is not None
+        return {"checked": 2, "new": 2, "recheck": 0, "backlog": 0, "reachable": 1,
+                "newly_reachable": 0, "waiting": 1, "gave_up": 0, "over_cap": 0,
+                "failed": 0, "instagram": 0, "instagram_search": int(on),
+                "searches": 2 if on else 0, "search_found": 1 if on else 0,
+                "search_likely": 1 if on else 0}
+
+    monkeypatch.setattr(contact, "run", fake_run)
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+    with caplog.at_level("INFO", logger="licmon"):
+        assert cli.main(["enrich"]) == 0
+    assert seen["search"] is None
+    assert "instagram off; instagram search off" in caplog.text
+    caplog.clear()
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "secret-brave-key")
+    with caplog.at_level("INFO", logger="licmon"):
+        assert cli.main(["enrich"]) == 0
+    assert isinstance(seen["search"], contact.BraveSearch)
+    assert "instagram search on: searches 2, handles found 1, likely 1" in caplog.text
+    assert "secret-brave-key" not in caplog.text
+    import logging
+    assert logging.getLogger("urllib3").level > logging.CRITICAL  # never logs the query URL
