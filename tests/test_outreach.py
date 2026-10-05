@@ -308,3 +308,23 @@ def test_empty_plan():
     assert outreach.build_plan([]) == []
     assert outreach.build_plan([plan_row(contact_status="waiting")]) == []
     assert outreach.EMPTY_PLAN == "No new reachable venues today."
+
+
+def test_sole_proprietor_owner_is_greeted_by_first_name():
+    # The legal name is the person: it is the company column too.
+    [entry] = outreach.build_plan([plan_row(company="Jane Q Tester",
+                                            contact_person="Jane Q Tester")])
+    assert entry["opener"].startswith("Hey Jane,")
+
+
+def test_fit_bullet_never_mixes_a_google_type_with_another_pitch():
+    rooftop = plan_row(business_name="Ibex Fake Rooftop", company=None, google_type="bar",
+                       stage="Licensed", platforms=None)
+    assert outreach.angle(rooftop) == "club_lounge"
+    assert outreach.why(rooftop)[1] == "Rooftop: tables, bottle service and the door"
+    # Google's word is used when it fits the pitch.
+    assert outreach.why(plan_row(google_type="night_club"))[1] == \
+        "Nightclub: tables, bottle service and the door"
+    bar = plan_row(priority="B", business_name="Quokka Fake Tavern", company=None,
+                   google_type="wine_bar")
+    assert outreach.why(bar)[1] == "Wine bar: event tickets and texting regulars"

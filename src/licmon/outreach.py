@@ -254,17 +254,32 @@ def angle(row: dict) -> str:
     return "bar" if gtype in contact.GOOGLE_BAR_TYPES else "restaurant"
 
 
+def _google_fits(gtype: str | None, chosen: str) -> bool:
+    """Does Google's type say the same kind of place as the pitch?"""
+    if chosen == "club_lounge":
+        return gtype in ("night_club", "dance_hall")
+    if chosen == "ticketed":
+        return gtype in contact.GOOGLE_A_TYPES
+    if chosen == "bar":
+        return gtype in contact.GOOGLE_BAR_TYPES
+    return contact.is_food_type(gtype)
+
+
 def _kind(row: dict, chosen: str) -> str:
-    """The kind of venue in plain words, for the fit bullet."""
-    label = contact.google_label(row.get("google_type"))
-    if label:
+    """The kind of venue in plain words, for the fit bullet: Google's word
+    when it agrees with the pitch, else the venue's own name."""
+    if _google_fits(row.get("google_type"), chosen):
+        label = contact.google_label(row.get("google_type"))
         return label[:1].upper() + label[1:]
     names = _names(row)
     if chosen == "club_lounge":
         club = qualify.NIGHTCLUB_WORDS.search(names)
         if club and "LOUNGE" in club.group(0):
             return "Lounge"
-        return "Nightclub" if club else _KIND[chosen]
+        if club:
+            return "Nightclub"
+        word = _CLUBLIKE.search(names)
+        return " ".join(word.group(0).split()).title() if word else _KIND[chosen]
     if chosen == "ticketed":
         word = _strong_ticketed(names)
         if word:
@@ -362,8 +377,8 @@ def opener(row: dict) -> str:
         channel_for(row.get("outreach_method")), venue=row.get("business_name") or "",
         angle=angle(row), timing=timing(row),
         platform=_join(others[:2]) if others else None,
-        first=first_name(row.get("contact_person"),
-                         (row.get("business_name"), row.get("company"))))
+        # Only the trade name: a sole proprietor's company name is the person.
+        first=first_name(row.get("contact_person"), (row.get("business_name"),)))
 
 
 # ---------------------------------------------------------------------------
