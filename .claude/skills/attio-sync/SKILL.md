@@ -13,6 +13,18 @@ history is "Adding a permit" (an existing licensee adding a permit). "New
 owner" venues still go, with Venue history "New owner". Attio is the owner's internal
 CRM: nothing here contacts a business. Ask the owner before any `--write`.
 
+The tier sent is the one shown after the contact lookup: when Google's
+type moves a venue (a lounge name Google calls a restaurant shows as B, a
+bar Google calls a nightclub shows as A), Attio gets that tier and decides
+eligibility on it (AGENTS.md, next to the tiers).
+
+Before the email, the daily run also calls `licmon attio-pull`, which only
+reads Attio: every License Leads entry's Status, and a same-name Target's
+status for the day's plan venues (at most `ATTIO_DAILY_CAP`). Contacted and
+Not a fit there become review statuses contacted and rejected here (only
+moving forward), and the daily plan leaves out venues the team already
+works. Run it by hand with `uv run licmon attio-pull` (read-only, safe).
+
 ## How it fits in Attio
 
 - Each venue is a record in the team's existing **Targets** object

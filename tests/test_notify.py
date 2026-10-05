@@ -1,8 +1,10 @@
-"""Tests for licmon.notify: short counts-only email plus XLSX attachment.
+"""Tests for licmon.notify: counts, today's outreach plan, XLSX attachment.
 
 No network, no real database (except the pg integration test, which uses a
-disposable Postgres), no real SMTP. All lead rows are synthetic. The central
-rule under test: the email body never contains lead data.
+disposable Postgres), no real SMTP. All lead rows are synthetic. The rules
+under test: the body names only the plan's venues (owner approved, the
+email goes only to LEADS_EMAIL_TO), every other lead detail stays in the
+attachment, and logs stay counts-only.
 """
 
 from __future__ import annotations

@@ -49,7 +49,10 @@ jobs:
           fi
       # Finds and verifies contact details (Google listing, the venue's own
       # website, Instagram business profile) for the day's Hot, A and strong B
-      # venues, and rechecks waiting venues weekly. Contacts nobody. Skips
+      # venues, and rechecks waiting venues weekly (and any venue marked
+      # wrong_contact, right away). The same calls note the booking or
+      # ticketing platform on the venue's site, opening-soon signs and
+      # Google's venue type. Contacts nobody. Skips
       # itself until GOOGLE_PLACES_API_KEY is set; Instagram is optional, and
       # BRAVE_SEARCH_API_KEY (optional) adds one web search per venue for its
       # Instagram (venue names only, never people). A
@@ -67,10 +70,25 @@ jobs:
           ATTIO_MIN_B_SCORE: ${{ vars.ATTIO_MIN_B_SCORE || '60' }}
           HOT_MIN_SCORE: ${{ vars.HOT_MIN_SCORE || '75' }}
         run: uv run licmon enrich
-      # Emails the owner a short counts-only note with the Excel lead sheet attached.
-      # Runs even when a source failed, so the email reports it. Skips itself
-      # when the email secrets are not set, and on one-source reruns. Logs
-      # print counts and sent/failed only.
+      # Reads the team's work back from Attio (read-only there): every License
+      # Leads entry's Status, and a same-name Target's status for today's plan
+      # venues (at most ATTIO_DAILY_CAP lookups). Contacted and Not a fit move
+      # leads forward; the plan leaves out venues the team already works.
+      # Skips itself when ATTIO_API_KEY is not set. Logs counts only.
+      - name: Read Attio statuses
+        if: ${{ !cancelled() && inputs.source == '' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ATTIO_API_KEY: ${{ secrets.ATTIO_API_KEY }}
+          ATTIO_DAILY_CAP: ${{ vars.ATTIO_DAILY_CAP || '50' }}
+        run: uv run licmon attio-pull
+      # Emails the owner the counts, today's outreach plan (venue names, the
+      # way to reach each and a ready opener) and the Excel lead sheet. It goes
+      # only to LEADS_EMAIL_TO; the message is never printed here. Runs even
+      # when a source failed, so the email reports it. Skips itself when the
+      # email secrets are not set, and on one-source reruns. Logs print counts
+      # and sent/failed only. OUTREACH_PROOF_* (variables, optional) add one
+      # proof sentence per venue kind to the openers.
       - name: Email the owner
         if: ${{ !cancelled() && inputs.source == '' }}
         env:
@@ -82,6 +100,10 @@ jobs:
           LEADS_EMAIL_FROM: ${{ secrets.LEADS_EMAIL_FROM }}
           LEADS_EMAIL_TO: ${{ secrets.LEADS_EMAIL_TO }}
           HOT_MIN_SCORE: ${{ vars.HOT_MIN_SCORE || '75' }}
+          OUTREACH_PROOF_CLUB_LOUNGE: ${{ vars.OUTREACH_PROOF_CLUB_LOUNGE }}
+          OUTREACH_PROOF_TICKETED: ${{ vars.OUTREACH_PROOF_TICKETED }}
+          OUTREACH_PROOF_BAR: ${{ vars.OUTREACH_PROOF_BAR }}
+          OUTREACH_PROOF_RESTAURANT: ${{ vars.OUTREACH_PROOF_RESTAURANT }}
         run: uv run licmon email
       # Adds today's Hot, A and strong B venues (never adult) to the Attio "License Leads" list on
       # Targets (internal CRM; nothing contacts a business). Skips itself when

@@ -5,6 +5,11 @@ exports/
 *.xlsx
 *.xls
 *.eml
+# Email previews hold the outreach plan (venue names, contacts, openers).
+email-preview*/
+plan-preview*/
+*-preview/
+preview.txt
 *.zip
 *.db
 *.sqlite

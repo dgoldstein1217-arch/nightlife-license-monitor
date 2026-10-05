@@ -30,7 +30,20 @@ or more; never adult, never adding a permit) it:
 
 It scores each way to reach the venue (the table is in AGENTS.md under
 "Contact confidence"), picks the best way to reach out, and saves it in the
-`contact_checks` table. **It never contacts a business and never looks up
+`contact_checks` table. From the same calls (no extra lookups) it also
+saves:
+
+- **Current platform**: booking, ticketing and POS platforms the home page
+  links or embeds (`PLATFORMS` in `contact.py`). Speakeasy itself means
+  Already on Speakeasy: kept off the plan.
+- **Opening soon**: "coming soon", "opening soon", "grand opening", "soft
+  open" or "opening in <Month>" on the site, Instagram bio or search
+  snippet, or a same-name Google listing with no reviews yet or not open
+  yet. "now open" means it just opened. Only a short label is kept.
+- **Google's venue type** (`primaryType`, `types`, `userRatingCount` are in
+  the same Places field mask), and the tier it implies (`google_tier`): a
+  bar Google calls a nightclub shows as A, a lounge name Google calls a
+  restaurant shows as B. The rule is in AGENTS.md next to the tiers. **It never contacts a business and never looks up
 people.** Logs are counts only.
 
 Venues with nothing Verified or Likely go on the spreadsheet's **Waiting on
@@ -163,6 +176,12 @@ find with its label and score. Common reasons:
 
 The owner can still use the search links on that tab by hand.
 
+**Marked wrong contact**: the owner said the suggested contact was wrong
+(`licmon review <ids> --status wrong_contact`, skill `review-leads`). That
+value is in `contact_checks.bad_channels`, is never offered again, and the
+venue is checked again on the next run. To see how many:
+`SELECT count(*) FROM contact_checks WHERE bad_channels <> '[]';`
+
 ## Tune the rules
 
 All in `src/licmon/contact.py`:
@@ -173,6 +192,10 @@ All in `src/licmon/contact.py`:
 | Label thresholds (Verified 75, Likely 50) | `LABEL_MIN` |
 | Cap without proof of the name (49) and for Facebook (74) | `CAP_UNPROVEN`, `CAP_FACEBOOK` |
 | Best way to reach, in order | `METHOD_RULES` |
+| Platforms looked for on the venue's site | `PLATFORMS` |
+| Opening-soon words | `OPENING_WORDS`, `opening_signal` |
+| Google types that make a venue A, bar types, food types | `GOOGLE_A_TYPES`, `GOOGLE_BAR_TYPES`, `GOOGLE_FOOD_TYPES` |
+| When Google's type moves the tier | `google_tier` (and `qualify.a_by_name_only`) |
 | Recheck every 7 days, give up after 120, "recent" post 60 days | `RECHECK_DAYS`, `GIVE_UP_DAYS`, `RECENT_POST_DAYS` |
 | Words ignored when comparing names (Bar, Lounge ...) | `_GENERIC_NAME_WORDS` |
 | Web search points: name 35, address or ZIP 20, city or metro 15 | `POINTS` (`ig_search_*`) |

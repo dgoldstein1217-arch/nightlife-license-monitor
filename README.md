@@ -4,7 +4,9 @@ Collects public liquor-license application records every day from official
 sources, keeps the ones that look like new or changing bars, clubs, lounges,
 ticketed venues (comedy, live music, sports, theaters, event venues),
 restaurants and taprooms in major nightlife metros, and puts them in a review
-queue. It emails the owner the day's list. It never contacts a business. See
+queue. It emails the owner the day's attack plan (every new venue he can
+reach, why, how, and a ready opener) and the full list. It never contacts a
+business: the owner sends every message himself. See
 `nightlife_liquor_license_monitor_prd.md`.
 
 Owner: start with `ONBOARDING.md`. Coding agents: `AGENTS.md` is the operating
@@ -14,7 +16,10 @@ skill for each routine job.
 **This repository is public. Lead data never goes in it.** Records, raw
 snapshots, scores and review decisions live only in a private Postgres
 database reached through the `DATABASE_URL` secret. Workflow logs print counts
-per source, never names or addresses.
+per source, never names or addresses. The daily email body names the plan's
+venues with their contact and opener (owner approved). It goes only to
+`LEADS_EMAIL_TO`, so an email preview holds lead data and is always written
+outside the repo.
 
 ## Sources (one connector each, `src/licmon/sources/`)
 
@@ -112,13 +117,31 @@ point at ABC's public license lookup page for a human to open.
    `enrich FAILED <lookup> failed (<status>)` and keeps the run green. It
    skips itself without `GOOGLE_PLACES_API_KEY`, and makes no web search
    without `BRAVE_SEARCH_API_KEY` (`instagram search off` in the log). It
-   never contacts anyone and never searches for a person.
-10. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
-   priority, source health, and an Excel file of every lead (the body holds
-   no lead details). It sends on empty days too (heartbeat) and skips itself when the SMTP
-   secrets are not set. `licmon email --preview DIR` writes the message to
-   files instead of sending.
-11. `licmon attio-sync --write` adds the day's Hot and A venues, and B venues
+   never contacts anyone and never searches for a person. The same calls
+   also record, with no extra lookups: the booking, ticketing or POS
+   platforms the home page links or embeds (Speakeasy itself means Already
+   on Speakeasy), opening-soon signs ("coming soon" and the like on the
+   site, Instagram bio or search snippet, or a same-name Google listing
+   with no reviews or not open yet), and Google's venue type, which can
+   move the tier shown on the sheet, the plan and Attio (a bar Google calls
+   a nightclub shows as A, and a lounge name Google calls a restaurant shows as
+   B). A contact marked `wrong_contact` is never offered again and the
+   venue is looked up again on the next run.
+10. `licmon attio-pull` (read-only in Attio) reads the team's Status of every
+   License Leads entry and, for today's plan venues, a same-name Target's
+   status. Contacted and Not a fit move leads forward to contacted and
+   rejected (never back), and the plan leaves out venues the team already
+   works. Skips itself without `ATTIO_API_KEY`. Counts only in the log.
+11. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
+   priority, contact and outreach-result counts, then today's attack plan
+   (`src/licmon/outreach.py`: every reachable new venue, no cap, with why
+   reach out, how, and a copy-ready DM, email or call script in the
+   owner's own wording), source health, and an Excel file of every lead.
+   Addresses, filing phones and record links stay in the file. It sends on
+   empty days too (heartbeat) and skips itself when the SMTP secrets are
+   not set. `licmon email --preview DIR` writes the message to files
+   instead of sending (outside the repo: it holds lead data).
+12. `licmon attio-sync --write` adds the day's Hot and A venues, and B venues
    scoring `ATTIO_MIN_B_SCORE` (60) or more, never adult ones or ones only
    adding a permit (and, once contacts are looked up, only reachable ones,
    with their verified phone, Instagram and website), to the Attio
@@ -132,7 +155,11 @@ point at ABC's public license lookup page for a human to open.
 * `daily_leads` view: one row per venue per day (several applications for the
   same premises are merged).
 * `review_queue` view: one row per application.
-* `records.review_status`: `new`, `approved`, `rejected`, `contacted`, `snoozed`.
+* `records.review_status`: `new`, `approved`, `rejected`, `contacted`,
+  `snoozed`, `replied`, `won`, `wrong_contact`. Contacted, replied, won and
+  wrong_contact are also logged in `outreach_outcomes` with the best way to
+  reach at that moment. The email and How scoring works count them for the
+  last 30 days. A `wrong_contact` lead stays open and is looked up again.
 
 On your own machine, with `DATABASE_URL` set:
 
@@ -141,10 +168,12 @@ uv run licmon status                       # last run per source, queue sizes
 uv run licmon export --out today.xlsx      # today's leads (UTC date), clean sheet
 uv run licmon export --all --open --out open.xlsx
 uv run licmon review 123 456 --status approved --note "call next week"
+uv run licmon review 123 --status replied        # or contacted, won, wrong_contact
 uv run licmon email --preview ~/Desktop/email-preview   # see the daily email
 uv run licmon requalify                    # after editing qualify.py / metros.py
 uv run licmon requalify --history          # also look up venue history again (network)
 uv run licmon enrich --cap 5               # look up contacts now (GOOGLE_PLACES_API_KEY)
+uv run licmon attio-pull                   # read the team's Attio statuses back (ATTIO_API_KEY)
 uv run licmon attio-sync                   # dry run: what would go to Attio (counts)
 uv run licmon slack --preview              # print today's Slack message here
 ```
@@ -160,6 +189,11 @@ writes the Excel workbook, anything else writes the New sheet as CSV.
 
 Tabs, each sorted by score, highest first:
 
+* **Today's plan** (first, once the contact lookup has run): the same
+  venues as the email's plan, in plan order, with Why reach out, Best way
+  to reach, Contact, Confidence, Second best way, the Opener, Contact
+  person, Current platform, Opening soon and Lead ID. "No new reachable
+  venues today." when there are none.
 * **New**: the leads asked for (today by default, or `--date` / `--all`)
   whose venue history is New venue or Unknown.
 * **Existing venues**: the same day's New owner and Adding a permit leads,
@@ -187,7 +221,10 @@ open, state tabs) leave out venues it checked without finding verified
 contact, put Newly reachable venues first, and add Newly reachable, Best way
 to reach, Contact (the handle, phone or email as a link), Confidence (label
 and score), Why we trust it and Second best way right after the name, plus
-a Facebook column after Instagram. Google and Instagram then link to the
+a Facebook column after Instagram, plus Current platform, Opening soon,
+Google says (Google's type, and the tier change it caused) and Speakeasy /
+Attio (Already on Speakeasy, In Attio: <status>). Priority shows the tier
+after Google's type. Google and Instagram then link to the
 verified website and profile; Phone is labeled "Filing phone (may be a
 lawyer)". Venues it never checked (C leads, weak B leads) keep the old
 layout's search links. Until it has run, the tabs and venues are exactly as
@@ -202,17 +239,21 @@ toward contact confidence.
 
 ## The daily email
 
-After collecting, the workflow runs `licmon email`: one short counts-only
-message (new leads by priority and market, how many are Hot, whether every
-source ran) with the workbook attached. The body never holds lead details. It sends
-even on days with no leads (no attachment then), so a missing email means
-something is wrong. It skips itself when the email settings are missing and
-the run stays green. Settings and troubleshooting live in AGENTS.md.
+After collecting, the workflow runs `licmon email`: the counts (new leads by
+priority and market, how many are Hot, contact and outreach-result counts),
+then today's attack plan, then whether every source ran, with the workbook
+attached. The plan names each venue with why reach out, how and a ready
+opener. It goes only to `LEADS_EMAIL_TO`, the owner's own address, and the
+log says counts only. Opener wording lives in `src/licmon/outreach.py`. It
+sends even on days with no leads (no attachment then), so a missing email
+means something is wrong. It skips itself when the email settings are
+missing and the run stays green. Settings and troubleshooting live in
+AGENTS.md.
 
 ## Repo layout
 
 ```text
-src/licmon/          pipeline, qualification, stage, venue history, contact lookup, spreadsheet, email, Attio, Slack, CLI
+src/licmon/          pipeline, qualification, stage, venue history, contact lookup, outreach plan, outcomes, spreadsheet, email, Attio, Slack, CLI
 src/licmon/sources/  one connector per official source
 .github/workflows/  daily-collect (daily.yml), tests (ci.yml), probe (probe.yml)
 tests/               deterministic tests with synthetic fixtures only
@@ -236,6 +277,9 @@ scripts/             package_for_client.sh builds the handover zip
    variables `ATTIO_DAILY_CAP` (50), `ATTIO_MIN_B_SCORE` (60), `ATTIO_LEADS_URL`,
    `HOT_MIN_SCORE` (75). Run
    `licmon attio-setup --write` once first (see AGENTS.md).
+   Openers (optional): variables `OUTREACH_PROOF_CLUB_LOUNGE`,
+   `OUTREACH_PROOF_TICKETED`, `OUTREACH_PROOF_BAR`,
+   `OUTREACH_PROOF_RESTAURANT` add one proof sentence per venue kind.
 4. Actions → `daily-collect` → Run workflow, once, to take the baseline.
 5. It then runs daily at 15:30 UTC.
 

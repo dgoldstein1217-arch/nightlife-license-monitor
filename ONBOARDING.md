@@ -239,6 +239,15 @@ On every tab the best leads are at the top. Each row is one venue:
   link, and the Lead ID numbers you use when you tell Claude Code which leads
   to mark reviewed.
 
+Once the contact lookup is on, the email also has **today's plan**: every
+new venue you can reach, best first, each with why it is worth reaching
+out, how to reach it, and an opener ready to copy (a DM, an email or a
+short call script, in your own words). The workbook's first tab, Today's
+plan, has the same list. Nothing is sent for you. After you reach out,
+tell Claude Code "I contacted <venue>", "they replied", "we won it" or
+"wrong contact", and it records it. A wrong contact is never suggested
+again, and the venue is looked up again the next day.
+
 Once they are set up, the same run also puts the Hot and A leads, plus the
 best B leads (score 60 or more), into a
 "License Leads" list in Attio, on your Targets, and posts a short note in your team's Slack

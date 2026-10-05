@@ -8,7 +8,17 @@ description: Set up, change, preview or test the daily lead email (Gmail app pas
 The daily run calls `licmon email` after collecting. It emails the owner's
 own address(es) only, never a business. Ask the owner before any real send
 and before changing recipients. Never write the owner's email address into
-any repo file (the repo may be public); use placeholders in examples.
+any repo file (the repo is public). Use placeholders in examples.
+
+What it holds: the counts, then **today's attack plan** (every new venue
+the owner can reach: name, city, stage, tier, why reach out, the best way
+to reach with the contact and its confidence, and a ready-to-copy opener),
+then source health, with the Excel workbook attached. The owner approved
+venue names, contacts and openers in the body because it goes only to
+`LEADS_EMAIL_TO`. The workflow log stays counts-only (`email sent: N leads
+(N tier A), plan N venues`). Opener wording is in
+`src/licmon/outreach.py`. Optional `OUTREACH_PROOF_*` variables add one
+proof sentence per venue kind (AGENTS.md settings table).
 
 ## Current state
 
@@ -27,8 +37,11 @@ open ~/Desktop/email-preview/preview.html
 ```
 
 This writes `preview.html` (the message body), `preview.txt`, the Excel
-attachment and `message.eml` to that folder. Never write previews inside the
-repo (lead data).
+attachment and `message.eml` to that folder. The preview holds lead data
+(the plan names venues, contacts and openers), so always write it outside
+the repo, for example `~/Desktop/email-preview`. The command refuses a
+folder inside the repo, and `.gitignore` also ignores `email-preview*/`
+folders as a backstop. Delete old previews when done.
 
 ## The app password (owner does this in the browser)
 
