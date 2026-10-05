@@ -96,8 +96,13 @@ point at ABC's public license lookup page for a human to open.
 9. `licmon enrich` looks up contact details for the venues Attio would get
    (`src/licmon/contact.py`): Google Places Text Search (New) at the same
    premises (the venue-history address rule), the listing's website
-   (Instagram, Facebook, email and phone links), and Instagram Business
-   Discovery for the handles that website links. Each way to reach the
+   (Instagram, Facebook, email and phone links), Instagram Business
+   Discovery for the handles that website links, and, when the website
+   gave no Verified or Likely Instagram, one Brave web search per venue
+   (`site:instagram.com "<venue name>" <city>`). The search reads only the
+   results (profile URL, title, snippet), never instagram.com; a profile
+   whose name matches plus the address or city is Likely at most, name
+   only is Unverified ("Possible Instagram" on the Waiting tab). Each way to reach the
    venue gets a 0 to 100 confidence (Verified, Likely, Unverified, None)
    and the venue a suggested outreach method; the points and rules are in
    AGENTS.md. Venues with nothing Verified or Likely wait and are checked
@@ -105,7 +110,9 @@ point at ABC's public license lookup page for a human to open.
    at most `ENRICH_DAILY_CAP` (150) a day. Results stay in
    `contact_checks`; the log is counts only, and a failed lookup logs
    `enrich FAILED <lookup> failed (<status>)` and keeps the run green. It
-   skips itself without `GOOGLE_PLACES_API_KEY`. It never contacts anyone.
+   skips itself without `GOOGLE_PLACES_API_KEY`, and makes no web search
+   without `BRAVE_SEARCH_API_KEY` (`instagram search off` in the log). It
+   never contacts anyone and never searches for a person.
 10. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
    priority, source health, and an Excel file of every lead (the body holds
    no lead details). It sends on empty days too (heartbeat) and skips itself when the SMTP
@@ -222,7 +229,8 @@ scripts/             package_for_client.sh builds the handover zip
    password), `LEADS_EMAIL_TO`, optional `LEADS_EMAIL_FROM`; variables
    `SMTP_HOST` / `SMTP_PORT` default to `smtp.gmail.com` / `587`.
    Contact lookup (optional): secret `GOOGLE_PLACES_API_KEY`, optional
-   `IG_GRAPH_ACCESS_TOKEN` and `IG_BUSINESS_ACCOUNT_ID`; variable
+   `IG_GRAPH_ACCESS_TOKEN`, `IG_BUSINESS_ACCOUNT_ID` and
+   `BRAVE_SEARCH_API_KEY` (Instagram by web search); variable
    `ENRICH_DAILY_CAP` (150). See skill `contact-lookup`.
    Attio and Slack (optional): secrets `ATTIO_API_KEY`, `SLACK_WEBHOOK_URL`;
    variables `ATTIO_DAILY_CAP` (50), `ATTIO_MIN_B_SCORE` (60), `ATTIO_LEADS_URL`,

@@ -41,8 +41,10 @@ weeks later than the other states.
 2. **Never contact a business** (email, SMS, calls, social) from this project.
    Leads are for the owner to review by hand. The contact lookup only reads
    Google's listing, the venue's own home page and Instagram's public
-   business profile, and suggests a way to reach out; it never sends
-   anything, and it never looks up people. The daily email goes only to
+   business profile, and runs one web search for the venue's Instagram (by
+   the venue's name, never a person's; it reads the search results only and
+   never opens instagram.com), and suggests a way to reach out; it never
+   sends anything, and it never looks up people. The daily email goes only to
    the owner's own address in `LEADS_EMAIL_TO`. Attio (the owner's CRM) and
    Slack (the team's own channel) are internal too: the sync and the ping
    reach the owner's team only, and nothing in them contacts a business.
@@ -145,7 +147,11 @@ venues Attio would get (Hot, A, and B scoring `ATTIO_MIN_B_SCORE` or more;
 never adult or adding a permit, the same rule in `attio.eligible`) are
 looked up: Google Places Text Search (New) with the name and address, the
 listing's website (Instagram, Facebook, email and phone links on its home
-page), and Instagram Business Discovery for the handles that website links.
+page), Instagram Business Discovery for the handles that website links,
+and, when the website gave no Verified or Likely Instagram, one web search
+(Brave Search API) for `site:instagram.com "<venue name>" <city>`. The
+search decides from the results alone (profile URL, title, snippet); it
+never opens instagram.com and never searches for a person.
 A Google listing counts only when its address is the same premises as the
 filing, by the venue-history rule below, except that a suite on one side
 only still matches (Google often drops it; two different suites never do). Each way to reach the venue gets
@@ -166,6 +172,17 @@ points (a person's name never counts):
 | Instagram the API cannot read (a personal account) | -15 |
 | Phone from the license filing ("Filing phone (may be a lawyer)"; at most 49, never reachable on its own) | 15 |
 | Google says the listing closed for good | everything from it scores 0 |
+| Instagram found by web search: the profile's display name or handle has every distinctive word of the venue name (generic words like Bar, Lounge, Club, Kitchen, Grill are skipped while one distinctive word remains; a name of only generic words must match whole). Without this a result never counts | 35 |
+| Found by web search: the result's snippet names the street address (house number and street) or ZIP | 20 |
+| Found by web search: the city, or a short name for the metro (`METRO_ALIASES` in `metros.py`: ATX, NYC, CHI ...), in the title, snippet or handle | 15 |
+
+An Instagram found by web search is **Likely at most** (74): name and
+address, or name and city, is Likely and reachable; name only is
+Unverified ("Possible Instagram" on the Waiting tab, for the owner to
+check). If two or more different accounts match equally well, all stay
+Unverified and up to two are shown. The owner chose "name plus city is
+enough": the risk is a different venue with the same name in the same
+city. A search find never adds points to the Google or website channels.
 
 Labels: **Verified** 75 to 100, **Likely** 50 to 74, **Unverified** 1 to
 49, **None** 0. A venue is **reachable** when one way to reach it is
@@ -176,11 +193,16 @@ the next one on a different channel is the second best:
 2. Call: the Google phone Verified or Likely, and Google says it is open.
 3. Facebook message: a Facebook page linked from the verified website.
 4. Email: an email linked from the verified website.
-5. Instagram DM (no recent posts seen): Instagram Verified or Likely, no
+5. Instagram DM (found by search): an Instagram found by web search is
+   Likely (name and address, or name and city).
+6. Instagram DM (no recent posts seen): Instagram Verified or Likely, no
    recent post seen (or the API could not read it).
-6. Website contact form: only the website is Verified or Likely.
-7. Call (Google does not say it is open).
-8. Otherwise "Wait: no verified contact yet".
+7. Website contact form: only the website is Verified or Likely.
+8. Call (Google does not say it is open).
+9. Otherwise "Wait: no verified contact yet".
+
+Rules 5 and 6 never compete: the search only runs when the website gave no
+Verified or Likely Instagram.
 
 Venues that are not reachable go to the spreadsheet's **Waiting on
 contact** tab and are checked again every 7 days. One that becomes
@@ -191,13 +213,21 @@ is reviewed (a reviewed lead is never rechecked). Each run checks today's
 eligible leads first, then due rechecks, then the last 7 days' unchecked
 leads, at most `ENRICH_DAILY_CAP` (150) a day. Results live only in the
 `contact_checks` table. Until `GOOGLE_PLACES_API_KEY` is set the step skips
-itself and the sheet, email, Attio and Slack work exactly as before.
+itself and the sheet, email, Attio and Slack work exactly as before. Until
+`BRAVE_SEARCH_API_KEY` is set no web search is made and the lookup works
+exactly as before (the log says `instagram search off`). A Likely
+search-found Instagram shows as the Contact with "Found by web search:
+name and city match" (or address) in Why we trust it, and goes to Attio's
+Instagram field; Unverified finds are in the Waiting tab's **Possible
+Instagram** columns. The email adds "Instagram found by search: N" once
+there is one.
 
 | Name | Kind | Value |
 |---|---|---|
 | `GOOGLE_PLACES_API_KEY` | secret | Google Places API (New) key; without it `licmon enrich` skips itself |
 | `IG_GRAPH_ACCESS_TOKEN` | secret, optional | Instagram Graph API token for Business Discovery; without it Instagram links are scored from the website only |
 | `IG_BUSINESS_ACCOUNT_ID` | secret, optional | the owner's Instagram professional account id the lookups go through |
+| `BRAVE_SEARCH_API_KEY` | secret, optional | Brave Search API key (Search plan, paid per request: owner's OK first, hard rule 5); without it no web search for Instagram |
 | `ENRICH_DAILY_CAP` | variable, optional | most venues looked up per day (API cost), default `150` |
 
 **Venue history** (`src/licmon/history.py`, `Source.venue_history`): many
@@ -359,7 +389,11 @@ stored records.
   key is wrong, restricted to the wrong API, or billing is off; the lookup
   stops for the day and the run stays green (skill `contact-lookup`).
   `instagram failed (HTTP 400 code 190)` means the Instagram token expired:
-  make a new one. Those venues are tried again on the next run.
+  make a new one. `instagram search failed (HTTP 401)` (or 402, 403, or 429
+  after retries) means the Brave key is wrong, the plan's credit ran out or
+  it hit the rate limit: the web search stops for that run only, everything
+  else goes on (skill `contact-lookup`). Those venues are tried again on the
+  next run.
 - **Attio step red.** `attio failed (HTTP 401)` or `(HTTP 403)`: the key is
   wrong or lacks a scope (see "Attio and Slack"). The word after the number
   is Attio's reason, for example `quota_exceeded` (the Attio plan's limit).

@@ -161,7 +161,7 @@ The first version is successful when:
 - A polished customer-facing application.
 - AI agents controlling the collection pipeline.
 
-Contact enrichment is now in scope (added 2026-10): looking up a venue's public phone, website, email, Instagram and Facebook from its Google listing and its own website, verifying them against the filing's address, scoring how sure we are, and suggesting an outreach method for a person to act on. People are not looked up.
+Contact enrichment is now in scope (added 2026-10): looking up a venue's public phone, website, email, Instagram and Facebook from its Google listing and its own website, verifying them against the filing's address, scoring how sure we are, and suggesting an outreach method for a person to act on. The lookup also runs one web search per venue for its Instagram account (by the venue's name and city), deciding from the search results alone without opening instagram.com. People are never looked up or searched for, and nothing contacts a business.
 
 ## Direction to the PI agent
 

@@ -170,11 +170,13 @@ time. If it landed there, mark it "Not spam".
 This step lets the daily run check whether you can actually reach each good
 lead. It looks at the venue's Google listing, its own website and its
 Instagram business page, checks they match the address on the license
-filing, and tells you the best way to reach out. It never contacts anyone.
+filing, and tells you the best way to reach out. With the optional Brave
+key it also searches the web for the venue's Instagram when the website
+does not link one. It never contacts anyone.
 Google charges for these lookups after a free monthly amount, so decide
 first; Claude Code can explain the cost (skill `contact-lookup`).
 
-You add up to three secrets the same way as `SMTP_PASSWORD` in Step 7
+You add up to four secrets the same way as `SMTP_PASSWORD` in Step 7
 (repo page on github.com, **Settings**, **Environments**, **production**,
 **Add environment secret**):
 
@@ -183,6 +185,7 @@ You add up to three secrets the same way as `SMTP_PASSWORD` in Step 7
 | `GOOGLE_PLACES_API_KEY` | A Google Maps Platform key with "Places API (New)" turned on | Yes, to turn the lookup on |
 | `IG_GRAPH_ACCESS_TOKEN` | An Instagram Graph API token from a Meta app | Optional, makes Instagram checks stronger |
 | `IG_BUSINESS_ACCOUNT_ID` | The id of your own Instagram business account | Optional, goes with the token |
+| `BRAVE_SEARCH_API_KEY` | A Brave Search API key (brave.com/search/api, Search plan, about $5 per 1,000 searches with $5 of free credit a month) | Optional, finds Instagram accounts the venue's website does not link |
 
 Ask Claude Code: "Help me set up the contact lookup." It walks you through
 making each one. Never paste them into chat. Until the Google key is there,
