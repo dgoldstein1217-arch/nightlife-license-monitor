@@ -81,7 +81,9 @@ FILING_PHONE_HEADER = "Filing phone (may be a lawyer)"
 WAITING_TAB = "Waiting on contact"
 NEWLY_REACHABLE = "Newly reachable"
 #: The Waiting on contact tab: what was found, when it is checked next, and
-#: the search links for a manual lookup.
+#: the search links for a manual lookup. Possible Instagram links the
+#: accounts the web search found that are not sure enough (name match only,
+#: or two accounts that match equally) for the owner to open and confirm.
 WAITING_COLUMNS: list[tuple[str, str, int]] = [
     ("priority", "Priority", 9),
     ("hot", "Hot", 7),
@@ -89,6 +91,8 @@ WAITING_COLUMNS: list[tuple[str, str, int]] = [
     ("business_name", "Business name", 34),
     ("contact_status_text", "Status", 10),
     ("found_text", "What we found (not verified)", 60),
+    ("possible_instagram_url", "Possible Instagram", 18),
+    ("possible_instagram_2_url", "Possible Instagram 2", 18),
     ("last_checked", "Last checked", 13),
     ("next_check", "Next check", 13),
     ("queue_date", "Queued on", 12),
@@ -402,6 +406,11 @@ def apply_contact(row: dict, check: dict, day: date | None = None) -> dict:
         ch = best.get(kind)
         return ch.url if ch else None
 
+    possible = sorted((c for c in channels
+                       if c.kind == contact.INSTAGRAM_SEARCH and not contact.reachable(c)),
+                      key=lambda c: -c.score)[:2]
+    possible += [None] * (2 - len(possible))
+
     row.update({
         "contact_status": status,
         "contact_status_text": contact.STATUS_TEXT.get(status, status or ""),
@@ -421,7 +430,14 @@ def apply_contact(row: dict, check: dict, day: date | None = None) -> dict:
         "verified_phone": best[contact.PHONE].value if contact.PHONE in best else None,
         "verified_email": best[contact.EMAIL].value if contact.EMAIL in best else None,
         "verified_website_url": url(contact.WEBSITE),
-        "verified_instagram_url": url(contact.INSTAGRAM),
+        "verified_instagram_url": url(contact.INSTAGRAM) or url(contact.INSTAGRAM_SEARCH),
+        # The verified Instagram came from the web search, not the website.
+        "instagram_by_search": (contact.INSTAGRAM not in best
+                                and contact.INSTAGRAM_SEARCH in best),
+        "possible_instagram_url": possible[0].url if possible[0] else None,
+        "possible_instagram_url_text": possible[0].value if possible[0] else None,
+        "possible_instagram_2_url": possible[1].url if possible[1] else None,
+        "possible_instagram_2_url_text": possible[1].value if possible[1] else None,
         "verified_facebook_url": url(contact.FACEBOOK),
     })
     return row
@@ -671,7 +687,8 @@ def _write_sheet(ws, rows: list[dict], columns: list[tuple[str, str, int]],
     link_cols = {"map_url": "Map", "google_url": "Search", "instagram_url": "Search",
                  "record_url": "Record", "facebook_url": "Page", "contact_url": "Open",
                  "person_linkedin_url": "Search", "person_instagram_url": "Search",
-                 "person_facebook_url": "Search"}
+                 "person_facebook_url": "Search", "possible_instagram_url": "Profile",
+                 "possible_instagram_2_url": "Profile"}
     keys = [key for key, _, _ in columns]
     for i, row in enumerate(rows, start=top + 1):
         for j, key in enumerate(keys, start=1):
@@ -728,6 +745,18 @@ def contact_legend_lines() -> list[tuple[str, str]]:
         ("Instagram bio names the street address or ZIP", pts["ig_bio_address"]),
         ("Instagram bio names the city or neighborhood", pts["ig_bio_city"]),
         ("Instagram the API cannot read (personal account)", pts["ig_unreadable"]),
+        ("Instagram found by web search: its name or handle matches the venue",
+         f"{pts['ig_search_name']}. Only when the website links no Verified or Likely "
+         "Instagram. Without the name, a result never counts."),
+        ("Found by web search: the snippet names the street address or ZIP",
+         pts["ig_search_address"]),
+        ("Found by web search: the city or metro (like ATX or NYC) in the result",
+         f"{pts['ig_search_city']}. Name and address, or name and city, is Likely at "
+         f"most ({c.CAP_SEARCH}): a venue with the same name in the same city would "
+         "look the same, so check the profile first."),
+        ("Found by web search: name only, or two accounts match equally",
+         "Unverified. Shown in Possible Instagram on the Waiting on contact tab to "
+         "open and confirm by hand."),
         ("Phone from the license filing", f"{pts['filing_phone']}. Often a lawyer or "
          "expediter, so it never makes a venue reachable on its own."),
         ("Confidence labels", f"Verified {c.LABEL_MIN[c.VERIFIED]} or more, Likely "

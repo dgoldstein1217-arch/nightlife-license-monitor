@@ -367,3 +367,73 @@ def test_contact_person_comes_from_the_filing_with_search_links_only():
     headers, [cells] = _table(wb["New"])
     assert cells["Contact person"].value == "Jane Q Tester"
     assert cells["Person on LinkedIn"].value == "Search"
+
+
+# --- Instagram found by web search (contact.py; invented handles) ---
+
+def search_channel(handle, signals, score, label):
+    return {"kind": "instagram_search", "value": "@" + handle,
+            "url": f"https://www.instagram.com/{handle}/", "signals": signals,
+            "score": score, "label": label}
+
+
+def test_search_found_instagram_on_lead_tab_and_possible_on_waiting_tab():
+    rows = leadsheet.group_records([
+        rec(1, venue_key="found", tier="A", lead_score=80, dba="ZEBRA FAKE LOUNGE",
+            event_type="new"),
+        rec(2, venue_key="maybe", tier="A", lead_score=70, dba="QUOKKA FAKE CLUB",
+            event_type="new")])
+    by_key = {r["venue_key"]: r for r in rows}
+    leadsheet.apply_contact(by_key["found"], check(
+        "reachable", confidence_score=50, confidence_label="Likely",
+        confidence_reason="Found by web search: name and city match",
+        outreach_method="Instagram DM (found by search)", outreach_second=None,
+        contact_kind="instagram_search", contact_value="@zebrafake.atx",
+        contact_url="https://www.instagram.com/zebrafake.atx/",
+        channels=[search_channel("zebrafake.atx", ["ig_search_name", "ig_search_city"],
+                                 50, "Likely")]), DAY)
+    leadsheet.apply_contact(by_key["maybe"], check("waiting", channels=[
+        search_channel("quokkafake", ["ig_search_name", "ig_search_ambiguous"], 35,
+                       "Unverified"),
+        search_channel("quokkafake.atx", ["ig_search_name", "ig_search_ambiguous"], 35,
+                       "Unverified"),
+        {"kind": "filing_phone", "value": "(512) 555-0199", "url": "tel:+15125550199",
+         "signals": ["filing_phone"], "score": 15, "label": "Unverified"}]), DAY)
+    assert by_key["found"]["instagram_by_search"]
+    assert not by_key["maybe"]["instagram_by_search"]
+    assert by_key["maybe"]["verified_instagram_url"] is None
+
+    wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows)))
+    _, cells = _table(wb["New"])
+    [zebra] = cells
+    assert zebra["Best way to reach"].value == "Instagram DM (found by search)"
+    assert zebra["Contact"].value == "@zebrafake.atx"
+    assert zebra["Contact"].hyperlink.target == "https://www.instagram.com/zebrafake.atx/"
+    assert zebra["Why we trust it"].value == "Found by web search: name and city match"
+    assert zebra["Instagram"].hyperlink.target == "https://www.instagram.com/zebrafake.atx/"
+
+    w_headers, w_cells = _table(wb["Waiting on contact"], header_row=2)
+    assert w_headers.index("Possible Instagram") == \
+        w_headers.index("What we found (not verified)") + 1
+    [quokka] = w_cells
+    assert quokka["Possible Instagram"].value == "@quokkafake"
+    assert quokka["Possible Instagram"].hyperlink.target == \
+        "https://www.instagram.com/quokkafake/"
+    assert quokka["Possible Instagram 2"].hyperlink.target == \
+        "https://www.instagram.com/quokkafake.atx/"
+    assert "Instagram (found by search): @quokkafake (Unverified 35)" in \
+        quokka["What we found (not verified)"].value
+    legend = [c.value for c in wb["How scoring works"]["A"]]
+    assert "5. Instagram DM (found by search)" in legend
+    assert any(str(v).startswith("Instagram found by web search") for v in legend)
+    text = " ".join(str(v) for ws in wb for row in ws.values for v in row if v)
+    assert "—" not in text
+
+
+def test_possible_instagram_is_empty_without_search_finds():
+    rows = checked_rows()
+    wait = next(r for r in rows if r["venue_key"] == "wait")
+    assert wait["possible_instagram_url"] is None and wait["possible_instagram_2_url"] is None
+    wb = load_workbook(io.BytesIO(leadsheet.build_workbook(rows, rows)))
+    [quokka] = _table(wb["Waiting on contact"], header_row=2)[1]
+    assert quokka["Possible Instagram"].value is None

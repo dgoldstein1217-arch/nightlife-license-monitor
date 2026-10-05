@@ -476,3 +476,18 @@ def test_contact_counts_only_once_the_lookup_has_run(fake_xlsx):
     assert "Waiting on contact: 2" in html_body
     for body in (plain, html_body):
         assert "555" not in body and "ZEBRA" not in body.upper()
+
+
+def test_email_counts_instagram_found_by_search(fake_xlsx):
+    data = sample_data()
+    leads = data["leads"]
+    leads[0].update(contact_status="reachable", venue_key="k1", instagram_by_search=True)
+    leads[1].update(contact_status="reachable", venue_key="k2")
+    leads[2].update(contact_status="waiting", venue_key="k3", instagram_by_search=False)
+    plain, html_body = bodies(notify.compose(data, DAY, sender="s", recipients=["o"]))
+    assert "Instagram found by search: 1" in plain and "Instagram found by search: 1" in html_body
+    assert plain.index("Newly reachable") < plain.index("Instagram found by search") < \
+        plain.index("Waiting on contact")
+    leads[0]["instagram_by_search"] = False
+    plain, _ = bodies(notify.compose(data, DAY, sender="s", recipients=["o"]))
+    assert "found by search" not in plain  # the line shows once the search found one

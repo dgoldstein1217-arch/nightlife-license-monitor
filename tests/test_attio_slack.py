@@ -645,3 +645,26 @@ def test_slack_names_newly_reachable_venues_without_contact_details():
     for secret in ("555", "zebrafake", "instagram.com", "@", "Fake St"):
         assert secret not in text
     assert not slack.is_news([row(1, whats_new=leadsheet.DETAILS_CHANGED)])
+
+
+def test_attio_gets_search_found_instagram_only_when_likely():
+    def checked(channels, status="reachable"):
+        r = row(1, hot=True, score=90)
+        leadsheet.apply_contact(r, {
+            "status": status, "channels": channels, "confidence_score": 50,
+            "confidence_label": "Likely", "confidence_reason": "x",
+            "outreach_method": "Call", "outreach_second": None})
+        return r
+
+    phone = {"kind": "phone", "value": "(512) 555-0142", "url": "tel:+15125550142",
+             "signals": ["listing_address", "listing_name", "listing_open"], "score": 65,
+             "label": "Likely"}
+    likely = {"kind": "instagram_search", "value": "@zebrafake.atx",
+              "url": "https://www.instagram.com/zebrafake.atx/",
+              "signals": ["ig_search_name", "ig_search_city"], "score": 50, "label": "Likely"}
+    unsure = dict(likely, signals=["ig_search_name"], score=35, label="Unverified")
+    values = attio.entry_values(checked([phone, likely]))
+    assert values["instagram_link"] == "https://www.instagram.com/zebrafake.atx/"
+    values = attio.entry_values(checked([phone, unsure]))
+    assert "instagram_link" not in values  # name only: never sent as a contact
+    assert attio.candidates([checked([unsure], status="waiting")]) == []

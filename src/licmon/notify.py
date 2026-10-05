@@ -143,9 +143,14 @@ def _contact_lines(leads: list[dict], open_leads: list[dict]) -> list[str]:
     reachable = sum(1 for lead in leads if lead.get("contact_status") == "reachable")
     newly = sum(1 for lead in leads if lead.get("newly_reachable"))
     waiting = len(leadsheet.waiting_rows(leads, open_leads))
-    return [f"Reachable today (verified contact): {reachable}",
-            f"Newly reachable (contact found on a recheck): {newly}",
-            f"Waiting on contact: {waiting}, on the {leadsheet.WAITING_TAB} tab."]
+    by_search = sum(1 for lead in leads if lead.get("contact_status") == "reachable"
+                    and lead.get("instagram_by_search"))
+    lines = [f"Reachable today (verified contact): {reachable}",
+             f"Newly reachable (contact found on a recheck): {newly}",
+             f"Waiting on contact: {waiting}, on the {leadsheet.WAITING_TAB} tab."]
+    if by_search:  # only once the Instagram web search has found one
+        lines.insert(2, f"Instagram found by search: {by_search}")
+    return lines
 
 
 # ---------------------------------------------------------------------------
