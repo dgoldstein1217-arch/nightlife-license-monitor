@@ -1,0 +1,154 @@
+---
+name: contact-lookup
+description: Set up, run or tune the contact lookup (licmon enrich) that finds and verifies how to reach each good lead through Google Places, the venue's website and Instagram. Use when the owner asks whether he can reach a venue, why a venue is on the Waiting on contact tab, what Best way to reach or Confidence mean, wants the Google or Instagram keys set up, or the "Look up venue contacts" step logs FAILED.
+---
+
+# Contact lookup: can we reach this venue?
+
+The daily run calls `licmon enrich` after collecting and before the email.
+For the venues Attio would get (Hot, A, and B scoring `ATTIO_MIN_B_SCORE`
+or more; never adult, never adding a permit) it:
+
+1. Searches Google Places (Text Search, New) for the venue name and address
+   and keeps a listing only if its address is the same premises as the
+   filing (same house number, street, ZIP or city and suite; floors
+   ignored). This is the venue-history rule in `src/licmon/history.py`.
+2. Opens the listing's website once (home page only) and reads its
+   Instagram, Facebook, email and phone links.
+3. Asks Instagram Business Discovery about the Instagram handles that
+   website links: does the profile link back to the same website, does its
+   bio name the address or city, when was the last post.
+
+It scores each way to reach the venue (the table is in AGENTS.md under
+"Contact confidence"), picks the best way to reach out, and saves it in the
+`contact_checks` table. **It never contacts a business and never looks up
+people.** Logs are counts only.
+
+Venues with nothing Verified or Likely go on the spreadsheet's **Waiting on
+contact** tab and are checked again every 7 days. When one becomes
+reachable it shows on that day's New tab as **Newly reachable**, goes to
+Attio and is named (name and city only) in Slack. After 120 days from the
+first check it says **Gave up** and is not checked again.
+
+## Set up (ask first: Google charges per lookup)
+
+Hard rule 5: adding a paid service needs the owner's OK. Google Maps
+Platform bills Text Search per request after a monthly free amount, and
+asking for the phone and website puts each request in a higher price tier.
+Check the current price on Google's Places API pricing page with the owner
+before turning it on or raising `ENRICH_DAILY_CAP` (default 150 lookups a
+day). Instagram Business Discovery has no charge but is rate limited.
+
+### Google Places key (turns the lookup on)
+
+The owner does this in the browser:
+
+1. console.cloud.google.com, pick or make a project, make sure billing is on.
+2. **APIs and Services**, **Library**, search **Places API (New)**, **Enable**.
+   (The older "Places API" is a different product and will not work.)
+3. **APIs and Services**, **Credentials**, **Create credentials**, **API key**.
+4. Click the key, **API restrictions**, **Restrict key**, tick only
+   **Places API (New)**, **Save**.
+5. Put it on GitHub, not in chat: repo page, **Settings**, **Environments**,
+   **production**, **Add environment secret**, name `GOOGLE_PLACES_API_KEY`.
+
+### Instagram (optional, makes Instagram checks stronger)
+
+Without these, an Instagram handle linked from the venue's verified website
+still counts (Verified), but there is no last-post date, so "Instagram DM"
+only appears as "Instagram DM (no recent posts seen)".
+
+Business Discovery needs the owner's own Instagram **professional**
+(business or creator) account, connected to a Facebook Page, and a Meta app
+with a token that may read it. Meta changes these screens and permission
+names often, so check Meta's current Instagram Graph API docs for "Business
+Discovery" with the owner. Then:
+
+- `IG_GRAPH_ACCESS_TOKEN`: the token. A normal long-lived user token expires
+  after about 60 days; a system user token from Meta Business settings does
+  not. When it expires the log says `instagram failed (HTTP 400 code 190)`.
+- `IG_BUSINESS_ACCOUNT_ID`: the owner's Instagram account id (a long
+  number, not the @handle). Meta's Graph API Explorer shows it as
+  `instagram_business_account` on the connected Page.
+
+Add both as environment secrets the same way. Never paste either into chat.
+
+Optional variable: `gh variable set ENRICH_DAILY_CAP --env production --body 100`.
+
+## Run it by hand
+
+Needs skill `connect-database` first. Load the key without printing it
+(from `~/.env` if the owner keeps it there, else typed at a hidden prompt):
+
+```bash
+read -rs GOOGLE_PLACES_API_KEY && export GOOGLE_PLACES_API_KEY
+uv run licmon enrich --cap 5      # a small batch first
+uv run licmon enrich              # the normal daily amount
+```
+
+The log says how many were checked, reachable, newly reachable, waiting and
+gave up, and `instagram on` or `off`. Then make the spreadsheet (skill
+`export-leads`) and look at Best way to reach, Confidence and the Waiting
+on contact tab. Do not paste contact details into chat unless the owner
+asks for a specific venue.
+
+Counts straight from the table:
+
+```sql
+SELECT status, confidence_label, count(*) FROM contact_checks GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT count(*) FROM contact_checks WHERE status = 'waiting' AND next_check_at <= now();
+```
+
+## Why is a venue waiting?
+
+Open the Waiting on contact tab. "What we found (not verified)" lists each
+find with its label and score. Common reasons:
+
+- **Nothing found yet**: no Google listing at that address (new venues
+  often have none until they open). It is checked again weekly.
+- **Google listing at the same address under another name**: probably the
+  old business at that address. Stays Unverified until the new name shows
+  on Google or the venue's Instagram bio names the address.
+- **A suite on one side only**: the filing says "Ste 5" and Google has no
+  suite (or the other way round). The address rule treats them as two
+  premises, on purpose (a mall's anchor store is not its tenant).
+- **Only the filing phone**: it is often a lawyer or expediter, so it never
+  makes a venue reachable on its own.
+
+The owner can still use the search links on that tab by hand.
+
+## Tune the rules
+
+All in `src/licmon/contact.py`:
+
+| What | Where |
+|---|---|
+| Points per signal | `POINTS` |
+| Label thresholds (Verified 75, Likely 50) | `LABEL_MIN` |
+| Cap without proof of the name (49) and for Facebook (74) | `CAP_UNPROVEN`, `CAP_FACEBOOK` |
+| Best way to reach, in order | `METHOD_RULES` |
+| Recheck every 7 days, give up after 120, "recent" post 60 days | `RECHECK_DAYS`, `GIVE_UP_DAYS`, `RECENT_POST_DAYS` |
+| Words ignored when comparing names (Bar, Lounge ...) | `_GENERIC_NAME_WORDS` |
+
+After a change: update the points table and the outreach list in AGENTS.md
+(the workbook's How scoring works tab reads the code, so it updates
+itself), run the tests, commit. Stored results keep their old scores until
+the venue is checked again. To recheck the waiting venues now (owner's OK
+first, it costs lookups):
+
+```sql
+UPDATE contact_checks SET next_check_at = now() WHERE status = 'waiting';
+```
+
+Reachable venues are not rechecked.
+
+## Troubleshooting
+
+| Log says | Meaning / fix |
+|---|---|
+| `enrich skipped (not configured): 0 venues checked` | `GOOGLE_PLACES_API_KEY` missing. Normal until it is set up. |
+| `enrich FAILED places failed (HTTP 403) xN` | Key wrong, not allowed to use Places API (New), or billing off. Fix the key in Google Cloud. The run stays green; venues are tried next run. |
+| `enrich FAILED places failed (HTTP 429) xN` | Google quota for the day. Lower `ENRICH_DAILY_CAP`. |
+| `enrich FAILED instagram failed (HTTP 400 code 190) xN` | Instagram token expired or revoked. Make a new one. Instagram is off for the rest of that run. |
+| `instagram off` | `IG_GRAPH_ACCESS_TOKEN` or `IG_BUSINESS_ACCOUNT_ID` missing. Optional. |
+| `over daily cap N` | More eligible venues than the cap. They are checked on the next runs (unchecked leads from the last 7 days). |

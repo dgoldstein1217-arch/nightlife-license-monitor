@@ -18,6 +18,10 @@ Hot: Club X, Houston (Approved) · Lounge Y, Miami (Licensed) · ...
 Added to Attio: 8 new, 2 updated (3 B) · Full list in today's email.  <link to License Leads in Attio>
 ```
 
+A venue the contact lookup could not reach before and now can adds a line
+"Newly reachable (contact found on a recheck): Name, City", and counts as
+news on its own. Never the handle, phone or email.
+
 At most five Hot names, with city and stage only: no addresses, phones or
 owners, and never an adult venue or a venue only adding a permit. A venue
 changing hands says "New owner" after its stage. "(3 B)" is how many of the Attio

@@ -93,14 +93,28 @@ point at ABC's public license lookup page for a human to open.
    silent baseline except for applications dated in the last 14 days.
 8. A failing source is logged, stored with its traceback in `source_runs`, does
    not stop the others, and makes the workflow exit non-zero (red run + email).
-9. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
+9. `licmon enrich` looks up contact details for the venues Attio would get
+   (`src/licmon/contact.py`): Google Places Text Search (New) at the same
+   premises (the venue-history address rule), the listing's website
+   (Instagram, Facebook, email and phone links), and Instagram Business
+   Discovery for the handles that website links. Each way to reach the
+   venue gets a 0 to 100 confidence (Verified, Likely, Unverified, None)
+   and the venue a suggested outreach method; the points and rules are in
+   AGENTS.md. Venues with nothing Verified or Likely wait and are checked
+   again weekly for 120 days. Today's leads go first, then due rechecks,
+   at most `ENRICH_DAILY_CAP` (150) a day. Results stay in
+   `contact_checks`; the log is counts only, and a failed lookup logs
+   `enrich FAILED <lookup> failed (<status>)` and keeps the run green. It
+   skips itself without `GOOGLE_PLACES_API_KEY`. It never contacts anyone.
+10. `licmon email` sends the owner the day's `daily_leads`: counts by metro and
    priority, source health, and an Excel file of every lead (the body holds
    no lead details). It sends on empty days too (heartbeat) and skips itself when the SMTP
    secrets are not set. `licmon email --preview DIR` writes the message to
    files instead of sending.
-10. `licmon attio-sync --write` adds the day's Hot and A venues, and B venues
+11. `licmon attio-sync --write` adds the day's Hot and A venues, and B venues
    scoring `ATTIO_MIN_B_SCORE` (60) or more, never adult ones or ones only
-   adding a permit, to the Attio
+   adding a permit (and, once contacts are looked up, only reachable ones,
+   with their verified phone, Instagram and website), to the Attio
    "License Leads" list on the Targets object (reusing a Target with the
    same name, else making a minimal one), and `licmon slack` pings the team's Slack
    channel when there is a new or stage-advanced lead. Both skip themselves
@@ -123,6 +137,7 @@ uv run licmon review 123 456 --status approved --note "call next week"
 uv run licmon email --preview ~/Desktop/email-preview   # see the daily email
 uv run licmon requalify                    # after editing qualify.py / metros.py
 uv run licmon requalify --history          # also look up venue history again (network)
+uv run licmon enrich --cap 5               # look up contacts now (GOOGLE_PLACES_API_KEY)
 uv run licmon attio-sync                   # dry run: what would go to Attio (counts)
 uv run licmon slack --preview              # print today's Slack message here
 ```
@@ -144,21 +159,39 @@ Tabs, each sorted by score, highest first:
   with a line saying these venues have been open before.
 * **All open**: every lead not yet reviewed, from all days.
 * **One tab per state** that has open leads (from the data, not a fixed list).
-* **How scoring works**: the points table and what each label means.
+* **Waiting on contact** (once the contact lookup has run): eligible venues
+  with no verified contact yet, what was found (unverified), when they were
+  last checked and are checked next, and the search links. Gave up venues
+  (120 days) are listed after the waiting ones.
+* **How scoring works**: the points table and what each label means (and,
+  once the lookup has run, the contact confidence points and outreach rules).
 
 Columns: Priority, Hot, Score, Business name, What's new (New filing, Stage
 advanced or Details changed), Company / owner, Business type, Filing, Venue
 history, Stage,
-Filed on, Phone, Owner / applicant names, Address, City, State, ZIP, Market,
-Mailing address, License applied for, Map, Google, Instagram, Official
-record, Lead ID. The All open and state tabs show Queued on in place of
-What's new.
+Filed on, Phone, Owner / applicant names, Contact person, Person on
+LinkedIn, Person on Instagram, Person on Facebook, Address, City, State,
+ZIP, Market, Mailing address, License applied for, Map, Google, Instagram,
+Official record, Lead ID. The All open and state tabs show Queued on in
+place of What's new.
 
-Contact details come only from the official records: Washington publishes a
-phone number and applicant names, California and Florida publish a mailing
-address. The Map, Google and Instagram columns are plain search links the
-owner clicks by hand to find a phone number, website or social account.
-Automatic lookups on other sites are out of scope (PRD).
+Once the contact lookup has run, the lead tabs (New, Existing venues, All
+open, state tabs) leave out venues it checked without finding verified
+contact, put Newly reachable venues first, and add Newly reachable, Best way
+to reach, Contact (the handle, phone or email as a link), Confidence (label
+and score), Why we trust it and Second best way right after the name, plus
+a Facebook column after Instagram. Google and Instagram then link to the
+verified website and profile; Phone is labeled "Filing phone (may be a
+lawyer)". Venues it never checked (C leads, weak B leads) keep the old
+layout's search links. Until it has run, the tabs and venues are exactly as
+before.
+
+The official records publish some contact details: Washington a phone
+number and applicant names, California and Florida a mailing address.
+Contact person is the first named person on the filing; its LinkedIn,
+Instagram and Facebook columns are plain Google searches the owner opens by
+hand. People are never looked up automatically, and a person never counts
+toward contact confidence.
 
 ## The daily email
 
@@ -172,7 +205,7 @@ the run stays green. Settings and troubleshooting live in AGENTS.md.
 ## Repo layout
 
 ```text
-src/licmon/          pipeline, qualification, stage, venue history, spreadsheet, email, Attio, Slack, CLI
+src/licmon/          pipeline, qualification, stage, venue history, contact lookup, spreadsheet, email, Attio, Slack, CLI
 src/licmon/sources/  one connector per official source
 .github/workflows/  daily-collect (daily.yml), tests (ci.yml), probe (probe.yml)
 tests/               deterministic tests with synthetic fixtures only
@@ -188,6 +221,9 @@ scripts/             package_for_client.sh builds the handover zip
 3. Email (optional): secrets `SMTP_USERNAME`, `SMTP_PASSWORD` (a Gmail app
    password), `LEADS_EMAIL_TO`, optional `LEADS_EMAIL_FROM`; variables
    `SMTP_HOST` / `SMTP_PORT` default to `smtp.gmail.com` / `587`.
+   Contact lookup (optional): secret `GOOGLE_PLACES_API_KEY`, optional
+   `IG_GRAPH_ACCESS_TOKEN` and `IG_BUSINESS_ACCOUNT_ID`; variable
+   `ENRICH_DAILY_CAP` (150). See skill `contact-lookup`.
    Attio and Slack (optional): secrets `ATTIO_API_KEY`, `SLACK_WEBHOOK_URL`;
    variables `ATTIO_DAILY_CAP` (50), `ATTIO_MIN_B_SCORE` (60), `ATTIO_LEADS_URL`,
    `HOT_MIN_SCORE` (75). Run

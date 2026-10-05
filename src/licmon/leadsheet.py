@@ -551,10 +551,10 @@ def is_existing(row: dict) -> bool:
     return row.get("venue_history") in history_mod.EXISTING
 
 
-WAITING_NOTE = ("No verified contact yet. Each venue is checked again every week and "
-                "moves back to the lead tabs, marked Newly reachable, once we find a way "
-                "to reach it. After 120 days it says Gave up. The search links help a "
-                "manual lookup.")
+WAITING_NOTE = ("No verified contact yet. We check each venue again every week. Once we "
+                "find a way to reach it, it moves back to the lead tabs as Newly reachable. "
+                "After 120 days it says Gave up. Use the search links to look one up "
+                "yourself.")
 
 
 def contact_checked(rows: list[dict]) -> bool:

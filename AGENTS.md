@@ -19,11 +19,12 @@ for the original requirements.
 It runs by itself every day at 15:30 UTC on GitHub Actions
 (`.github/workflows/daily.yml`, workflow name `daily-collect`). It writes to a
 private Neon Postgres database (project `tiny-truth-43995411`, branch
-`production`). When the email secrets are set, the same run then emails the
-owner that day's leads with a spreadsheet attached, sends the day's Hot, A
-and strong B venues to the "License Leads" list in Attio, and pings the team's Slack
-channel. Each of those three steps skips itself until its settings exist.
-Nobody has to start it.
+`production`). The same run then looks up and verifies contact details for
+the day's Hot, A and strong B venues (`licmon enrich`), emails the owner
+that day's leads with a spreadsheet attached, sends the venues it can reach
+to the "License Leads" list in Attio, and pings the team's Slack channel.
+Each of those four steps skips itself until its settings exist. Nobody has
+to start it.
 
 Sources: New York, Texas, Chicago (two lists), Washington and California
 publish pending or new applications. Florida publishes no pending list, so its
@@ -38,7 +39,10 @@ weeks later than the other states.
    addresses, phone numbers, spreadsheet exports, email previews, database dumps,
    `.env*` files or connection strings. Workflow logs must stay counts-only.
 2. **Never contact a business** (email, SMS, calls, social) from this project.
-   Leads are for the owner to review by hand. The daily email goes only to
+   Leads are for the owner to review by hand. The contact lookup only reads
+   Google's listing, the venue's own home page and Instagram's public
+   business profile, and suggests a way to reach out; it never sends
+   anything, and it never looks up people. The daily email goes only to
    the owner's own address in `LEADS_EMAIL_TO`. Attio (the owner's CRM) and
    Slack (the team's own channel) are internal too: the sync and the ping
    reach the owner's team only, and nothing in them contacts a business.
@@ -86,6 +90,7 @@ export DATABASE_URL="$(neon cs production --project-id tiny-truth-43995411 --ssl
 | "Push the leads to Attio" / "what would go to Attio?" | Dry run first: `uv run licmon attio-sync` (counts only, writes nothing). Real write only with the owner's OK: `uv run licmon attio-sync --write`. Add `--date 2026-10-01` for another day. Skill `attio-sync`. |
 | "Set up Attio" | Once, skill `attio-sync`: `uv run licmon attio-setup` (dry run), then `--write` with the owner's OK. |
 | "Test the Slack ping" / "set up Slack" | Skill `slack-setup`. Preview on this Mac: `uv run licmon slack --preview` (prints, posts nothing). A real post only with the owner's OK. |
+| "Can I reach this venue?" / "look up contacts now" | The sheet's Best way to reach, Contact and Confidence columns, and the Waiting on contact tab. By hand: `uv run licmon enrich` with `GOOGLE_PLACES_API_KEY` loaded (skill `contact-lookup`). |
 | "Only Hot leads" / "make fewer or more leads Hot" | Hot = tier A (not adult) with a score of 75 or more. Filter the Hot column, or change the threshold without code: `gh variable set HOT_MIN_SCORE --env production --body 80`, then `uv run licmon requalify` with the same `HOT_MIN_SCORE` set locally (skill `tune-tiers`). |
 
 The owner sells event ticketing, table and VIP reservations and POS
@@ -135,6 +140,65 @@ status wording to a stage and names its nightlife licenses
 the points table is shared (`src/licmon/qualify.py`). A filing whose stage
 moves up (say Received to Approved) is queued again as "Stage advanced".
 
+**Contact confidence** (`src/licmon/contact.py`, `licmon enrich`): the
+venues Attio would get (Hot, A, and B scoring `ATTIO_MIN_B_SCORE` or more;
+never adult or adding a permit, the same rule in `attio.eligible`) are
+looked up: Google Places Text Search (New) with the name and address, the
+listing's website (Instagram, Facebook, email and phone links on its home
+page), and Instagram Business Discovery for the handles that website links.
+A Google listing counts only when its address is the same premises as the
+filing, by the venue-history rule below. Each way to reach the venue gets
+points (a person's name never counts):
+
+| Signal | Points |
+|---|---|
+| Google listing at the same address as the filing | 35 |
+| The listing's name matches the venue name (without it, everything from that listing stays Unverified, at most 49: it may be the old business) | 20 |
+| Phone: Google says the place is open | 10 |
+| Phone: the venue website shows the same number | 10 |
+| Website: the site loads | 10 |
+| Email or Instagram linked from the venue website | 20 |
+| Facebook page linked from the venue website (cannot be checked by API, so at most 74, Likely) | 10 |
+| Instagram profile links back to the same website | 15 |
+| Instagram bio names the street address or ZIP (also proves the venue when the listing's name does not match) | 15 |
+| Instagram bio names the city or neighborhood | 5 |
+| Instagram the API cannot read (a personal account) | -15 |
+| Phone from the license filing ("Filing phone (may be a lawyer)"; at most 49, never reachable on its own) | 15 |
+| Google says the listing closed for good | everything from it scores 0 |
+
+Labels: **Verified** 75 to 100, **Likely** 50 to 74, **Unverified** 1 to
+49, **None** 0. A venue is **reachable** when one way to reach it is
+Verified or Likely. **Best way to reach** is the first rule that fits, and
+the next one on a different channel is the second best:
+
+1. Instagram DM: Instagram Verified or Likely, with a post in the last 60 days.
+2. Call: the Google phone Verified or Likely, and Google says it is open.
+3. Facebook message: a Facebook page linked from the verified website.
+4. Email: an email linked from the verified website.
+5. Instagram DM (no recent posts seen): Instagram Verified or Likely, no
+   recent post seen (or the API could not read it).
+6. Website contact form: only the website is Verified or Likely.
+7. Call (Google does not say it is open).
+8. Otherwise "Wait: no verified contact yet".
+
+Venues that are not reachable go to the spreadsheet's **Waiting on
+contact** tab and are checked again every 7 days. One that becomes
+reachable is marked **Newly reachable** on that day's sheet (sorted first),
+goes to Attio and is named in Slack. After 120 days from the first check
+it says **Gave up** and stays on the Waiting tab, unchecked, until the lead
+is reviewed (a reviewed lead is never rechecked). Each run checks today's
+eligible leads first, then due rechecks, then the last 7 days' unchecked
+leads, at most `ENRICH_DAILY_CAP` (150) a day. Results live only in the
+`contact_checks` table. Until `GOOGLE_PLACES_API_KEY` is set the step skips
+itself and the sheet, email, Attio and Slack work exactly as before.
+
+| Name | Kind | Value |
+|---|---|---|
+| `GOOGLE_PLACES_API_KEY` | secret | Google Places API (New) key; without it `licmon enrich` skips itself |
+| `IG_GRAPH_ACCESS_TOKEN` | secret, optional | Instagram Graph API token for Business Discovery; without it Instagram links are scored from the website only |
+| `IG_BUSINESS_ACCOUNT_ID` | secret, optional | the owner's Instagram professional account id the lookups go through |
+| `ENRICH_DAILY_CAP` | variable, optional | most venues looked up per day (API cost), default `150` |
+
 **Venue history** (`src/licmon/history.py`, `Source.venue_history`): many
 filings look new but are not. Each qualified lead is compared with the
 state's own list of existing licenses at the same premises (same house
@@ -170,10 +234,17 @@ The attached workbook has tabs: **New** (the day's new venues and unknown
 history), **Existing venues** (new owner or adding a permit), **All open**
 (every lead not yet reviewed), one tab per state with open leads, and
 **How scoring works**. One row per venue, highest score first; the columns
-are listed under "The spreadsheet" in README.md (`src/licmon/leadsheet.py`). Map, Google and
-Instagram are plain search links the owner clicks by hand to find the phone
-and website; contact details come only from the official records, never from
-outside lookups (PRD).
+are listed under "The spreadsheet" in README.md (`src/licmon/leadsheet.py`).
+Once the contact lookup has run, the lead tabs show only venues we can
+reach (plus any it has not checked, like C leads), with Best way to reach,
+Contact, Confidence and Why we trust it after the name; the rest are on a
+**Waiting on contact** tab after Existing venues. On the lead tabs Google
+and Instagram link to the verified website and profile; the plain search
+links stay on the Waiting tab and on unchecked rows. Every tab has a
+**Contact person** column: the person named on the filing (Washington
+publishes applicants) with LinkedIn, Instagram and Facebook search links the
+owner opens by hand. People are never looked up automatically. The email
+body adds counts only: reachable today, newly reachable, waiting.
 
 Settings live in the GitHub `production` environment:
 
@@ -222,11 +293,19 @@ set, and both log counts only.
   `ATTIO_WRITE_API_KEY` loaded (owner's OK first), which adds the B option. The list is
   created once with `licmon attio-setup --write` (skill `attio-sync`). It
   only creates new things and stops if the list exists.
+  Once the contact lookup has run, only reachable venues go (the log says
+  "held back without verified contact N"; they go the day they become
+  reachable), and Phone, Instagram and Google hold the verified phone,
+  profile and website instead of the filing phone and search links. The
+  sync adds the list fields **Best way to reach**, **Contact confidence**,
+  **Email** and **Facebook** the same way as Venue history.
 - **Slack** posts only when the day has a new filing or a stage-advanced
   lead: counts (Hot, A, B, C), up to five Hot venue names with city and
   stage (never an adult venue or one only adding a permit; "New owner" is
   added after the stage), how many went to Attio and how many of those
-  are B, and a link to the Attio list. No addresses, phones or owners. Skill `slack-setup`.
+  are B, and a link to the Attio list. No addresses, phones or owners. A
+  venue that became reachable after waiting is news too: "Newly reachable"
+  lists up to five names with city, never the contact itself. Skill `slack-setup`.
 
 | Name | Kind | Value |
 |---|---|---|
@@ -275,6 +354,11 @@ stored records.
   say Unknown. If it keeps happening, check the dataset with a plain GET
   and see skill `fix-broken-source`; `uv run licmon requalify --history`
   fills them in once it works again.
+- **`enrich FAILED places failed (HTTP 403) xN` in the log.** The Google
+  key is wrong, restricted to the wrong API, or billing is off; the lookup
+  stops for the day and the run stays green (skill `contact-lookup`).
+  `instagram failed (HTTP 400 code 190)` means the Instagram token expired:
+  make a new one. Those venues are tried again on the next run.
 - **Attio step red.** `attio failed (HTTP 401)` or `(HTTP 403)`: the key is
   wrong or lacks a scope (see "Attio and Slack"). The word after the number
   is Attio's reason, for example `quota_exceeded` (the Attio plan's limit).
@@ -345,6 +429,7 @@ needed at current volumes.
 | `email-setup` | set up, change, preview or test the daily email |
 | `attio-sync` | set up the Attio License Leads list, or push leads to Attio |
 | `slack-setup` | set up, preview or test the Slack ping |
+| `contact-lookup` | set up the contact lookup keys, run `licmon enrich` by hand, or tune the confidence and outreach rules |
 | `fix-broken-source` | fix a red run or a source that changed format |
 | `add-source` | add a new state or city |
 | `tune-tiers` | change what counts as a lead, the tiers, the score weights, Hot, or the target metros |

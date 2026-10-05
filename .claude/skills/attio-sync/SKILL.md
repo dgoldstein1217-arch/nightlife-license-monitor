@@ -58,6 +58,13 @@ Then, for each venue, highest score first:
    in Attio.
 3. The venue is added to the list with all its details and Status **New**.
 
+Once the contact lookup runs (skill `contact-lookup`), only venues it can
+reach go; the others wait on the spreadsheet and go the day they become
+reachable (the log says "held back without verified contact N"). Phone,
+Instagram and Google then hold the verified phone, Instagram profile and
+website, and the sync adds the list fields Best way to reach, Contact
+confidence, Email and Facebook the same way as Venue history.
+
 At most `ATTIO_DAILY_CAP` new Targets a day (default 50). Reused Targets and
 updates do not count. Venues over the limit are skipped and stay in the
 spreadsheet; Slack says how many. Logs show counts only.

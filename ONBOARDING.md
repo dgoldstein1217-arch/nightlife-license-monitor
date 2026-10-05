@@ -165,6 +165,29 @@ Claude Code will run the job once. A few minutes later you get an email with
 a subject like "Nightlife leads for ...". Check your spam folder the first
 time. If it landed there, mark it "Not spam".
 
+## Step 9 (optional): Turn on the contact lookup
+
+This step lets the daily run check whether you can actually reach each good
+lead. It looks at the venue's Google listing, its own website and its
+Instagram business page, checks they match the address on the license
+filing, and tells you the best way to reach out. It never contacts anyone.
+Google charges for these lookups after a free monthly amount, so decide
+first; Claude Code can explain the cost (skill `contact-lookup`).
+
+You add up to three secrets the same way as `SMTP_PASSWORD` in Step 7
+(repo page on github.com, **Settings**, **Environments**, **production**,
+**Add environment secret**):
+
+| Name | What it is | Needed? |
+|---|---|---|
+| `GOOGLE_PLACES_API_KEY` | A Google Maps Platform key with "Places API (New)" turned on | Yes, to turn the lookup on |
+| `IG_GRAPH_ACCESS_TOKEN` | An Instagram Graph API token from a Meta app | Optional, makes Instagram checks stronger |
+| `IG_BUSINESS_ACCOUNT_ID` | The id of your own Instagram business account | Optional, goes with the token |
+
+Ask Claude Code: "Help me set up the contact lookup." It walks you through
+making each one. Never paste them into chat. Until the Google key is there,
+the lookup step skips itself and everything else works as before.
+
 ## What the daily email looks like
 
 The message itself is short: how many new leads came in, how many are Hot,
@@ -175,6 +198,9 @@ the attached Excel file.
 The Excel file has tabs along the bottom:
 
 - **New**: today's leads.
+- **Waiting on contact** (once the contact lookup is on): good leads we
+  cannot reach yet. Each one is checked again every week. When we find a
+  way to reach it, it moves back to the New tab marked **Newly reachable**.
 - **All open**: every lead you have not marked reviewed yet, from any day.
 - **One tab per state** (like NY, TX, IL): the All open list split by state.
 - **How scoring works**: what the score and the labels mean.
@@ -192,6 +218,15 @@ On every tab the best leads are at the top. Each row is one venue:
   changed.
 - **Stage**: how far along the license is. Received (just filed), In review,
   Approved, or Licensed.
+- **Best way to reach**, **Contact**, **Confidence** and **Why we trust it**
+  (once the contact lookup is on): for example "Instagram DM", the handle as
+  a link, "Verified 90", and "Google listing at the same address, same
+  name; the website links this Instagram". Verified and Likely mean you can
+  use it. The phone from the filing is labeled "may be a lawyer", because
+  it often is.
+- **Contact person**: the person named on the filing, when the state
+  publishes one, with LinkedIn, Instagram and Facebook search links you
+  open yourself.
 - Then the business name, company or owner, business type, what was filed
   (new application, change of owner, new location, and so on), filed on
   date, phone and owner names when the state publishes them (Washington
@@ -228,6 +263,7 @@ in plain words. For example:
 - "Send the daily email to my partner too."
 - "What would go to Attio today?"
 - "Set up the Slack ping."
+- "Which venues are waiting on contact?"
 
 Priority: **A** is nightclubs, lounges and ticketed venues: comedy clubs,
 live music, sports venues like small stadiums and arenas, theaters, and event

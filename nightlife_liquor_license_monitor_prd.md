@@ -157,10 +157,11 @@ The first version is successful when:
 
 - Nationwide coverage of all states and municipalities.
 - Perfect categorization of every applicant.
-- Fully automated contact enrichment.
-- Automatic cold-email, SMS, social-media, or calling campaigns.
+- Automatic outreach of any kind: cold email, SMS, social-media messages, calls or campaigns. The system never contacts a business.
 - A polished customer-facing application.
 - AI agents controlling the collection pipeline.
+
+Contact enrichment is now in scope (added 2026-10): looking up a venue's public phone, website, email, Instagram and Facebook from its Google listing and its own website, verifying them against the filing's address, scoring how sure we are, and suggesting an outreach method for a person to act on. People are not looked up.
 
 ## Direction to the PI agent
 
