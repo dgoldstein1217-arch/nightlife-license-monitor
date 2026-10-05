@@ -449,6 +449,9 @@ def cmd_slack(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # urllib3's retry warnings name the host, which for venue websites is
+    # lead data. Workflow logs are public and must stay counts-only.
+    logging.getLogger("urllib3").setLevel(logging.CRITICAL + 1)
     p = argparse.ArgumentParser(prog="licmon", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 
