@@ -192,3 +192,32 @@ SELECT
     min(prior_since) AS prior_since
 FROM review_queue
 GROUP BY queue_date, venue_key;
+
+-- Contact lookup (contact.py): can the owner reach this venue? One row per
+-- venue_key, only for venues eligible for Attio. Contact details live only
+-- here, in the private database; logs carry counts only.
+CREATE TABLE IF NOT EXISTS contact_checks (
+    venue_key           TEXT PRIMARY KEY,
+    status              TEXT NOT NULL,           -- reachable | waiting | gave_up
+    channels            JSONB NOT NULL DEFAULT '[]',  -- every channel found, with signals and score
+    confidence_score    INTEGER NOT NULL DEFAULT 0,   -- 0 to 100, best channel
+    confidence_label    TEXT NOT NULL DEFAULT 'None', -- Verified | Likely | Unverified | None
+    confidence_reason   TEXT,
+    outreach_method     TEXT,                    -- best way to reach, or "Wait: ..."
+    outreach_second     TEXT,
+    contact_kind        TEXT,                    -- the channel the method uses
+    contact_value       TEXT,
+    contact_url         TEXT,
+    place_id            TEXT,                    -- Google place id of the matched listing
+    maps_url            TEXT,
+    business_status     TEXT,                    -- Google: OPERATIONAL, CLOSED_TEMPORARILY ...
+    attempts            INTEGER NOT NULL DEFAULT 0,
+    first_checked_at    TIMESTAMPTZ NOT NULL,
+    last_checked_at     TIMESTAMPTZ NOT NULL,
+    next_check_at       TIMESTAMPTZ,             -- waiting venues only
+    became_reachable_at TIMESTAMPTZ,
+    newly_reachable_on  DATE,                    -- the day it moved from waiting to reachable
+    gave_up_at          TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS contact_checks_due_idx ON contact_checks (status, next_check_at);
+CREATE INDEX IF NOT EXISTS contact_checks_newly_idx ON contact_checks (newly_reachable_on);

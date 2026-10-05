@@ -18,7 +18,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from urllib.parse import quote_plus
 
 from . import history as history_mod
@@ -58,6 +58,66 @@ HEADERS = [h for _, h, _ in COLUMNS]
 #: All open and state tabs span many days: the queue date replaces What's new.
 OPEN_COLUMNS = [("queue_date", "Queued on", 12) if key == "whats_new" else (key, h, w)
                 for key, h, w in COLUMNS]
+
+#: Lead tabs once the contact lookup has run: these go right after the name.
+CONTACT_COLUMNS: list[tuple[str, str, int]] = [
+    ("newly_reachable", "Newly reachable", 16),
+    ("outreach_method", "Best way to reach", 28),
+    ("contact_url", "Contact", 30),
+    ("confidence", "Confidence", 14),
+    ("confidence_reason", "Why we trust it", 54),
+    ("outreach_second", "Second best way", 26),
+]
+FILING_PHONE_HEADER = "Filing phone (may be a lawyer)"
+WAITING_TAB = "Waiting on contact"
+NEWLY_REACHABLE = "Newly reachable"
+#: The Waiting on contact tab: what was found, when it is checked next, and
+#: the search links for a manual lookup.
+WAITING_COLUMNS: list[tuple[str, str, int]] = [
+    ("priority", "Priority", 9),
+    ("hot", "Hot", 7),
+    ("lead_score", "Score", 8),
+    ("business_name", "Business name", 34),
+    ("contact_status_text", "Status", 10),
+    ("found_text", "What we found (not verified)", 60),
+    ("last_checked", "Last checked", 13),
+    ("next_check", "Next check", 13),
+    ("queue_date", "Queued on", 12),
+    ("stage", "Stage", 11),
+    ("company", "Company / owner", 34),
+    ("contact_person", "Contact person", 24),
+    ("person_linkedin_url", "Person on LinkedIn", 12),
+    ("person_instagram_url", "Person on Instagram", 12),
+    ("person_facebook_url", "Person on Facebook", 12),
+    ("phone", FILING_PHONE_HEADER, 18),
+    ("address", "Address", 34),
+    ("city", "City", 18),
+    ("state", "State", 7),
+    ("zip", "ZIP", 8),
+    ("market", "Market", 24),
+    ("map_url", "Map", 8),
+    ("google_url", "Google", 9),
+    ("instagram_url", "Instagram", 11),
+    ("record_url", "Official record", 14),
+    ("lead_ids", "Lead ID", 12),
+]
+
+
+def with_contact_columns(columns: list[tuple[str, str, int]]) -> list[tuple[str, str, int]]:
+    """A lead tab's columns once the contact lookup has run: CONTACT_COLUMNS
+    after the name, a Facebook column after Instagram, and the filing phone
+    labeled for what it is."""
+    out = []
+    for key, header, width in columns:
+        if key == "phone":
+            header = FILING_PHONE_HEADER
+        out.append((key, header, width))
+        if key == "business_name":
+            out += CONTACT_COLUMNS
+        if key == "instagram_url":
+            out.append(("facebook_url", "Facebook", 11))
+    return out
+
 
 NEW_FILING = "New filing"
 STAGE_ADVANCED = "Stage advanced"
@@ -208,6 +268,7 @@ FROM review_queue q JOIN records r ON r.id = q.record_id
 WHERE r.qualified
   AND (%(day)s::date IS NULL OR q.queue_date = %(day)s)
   AND (NOT %(open)s OR q.review_status = 'new')
+  AND (%(keys)s::text[] IS NULL OR q.venue_key = ANY(%(keys)s))
 ORDER BY q.queue_date DESC, q.score DESC, q.record_id
 """
 _FIELDS = ["queue_date", "record_id", "venue_key", "tier", "score", "legal_name", "dba",
@@ -218,12 +279,114 @@ _FIELDS = ["queue_date", "record_id", "venue_key", "tier", "score", "legal_name"
            "venue_history", "prior_licenses", "prior_since"]
 
 
-def load_rows(conn, day: date | None, open_only: bool = False) -> list[dict]:
-    """Queued leads for `day` (all days if None), one row per venue per day."""
+def load_rows(conn, day: date | None, open_only: bool = False,
+              venue_keys: list[str] | None = None, with_contacts: bool = True) -> list[dict]:
+    """Queued leads for `day` (all days if None), one row per venue per day.
+
+    `venue_keys` limits it to those venues, latest queue day each. With
+    `with_contacts`, each row gets its contact lookup result, and a day's
+    rows also include venues that became reachable that day although they
+    were queued earlier (open ones only)."""
     with conn.cursor() as cur:
-        cur.execute(_SQL, {"day": day, "open": open_only})
+        cur.execute(_SQL, {"day": day, "open": open_only, "keys": venue_keys})
         records = [dict(zip(_FIELDS, r)) for r in cur.fetchall()]
-    return group_records(records)
+    rows = group_records(records)
+    if venue_keys is not None:
+        latest: dict[str, dict] = {}
+        for row in rows:
+            key = row["venue_key"]
+            if key not in latest or row["queue_date"] > latest[key]["queue_date"]:
+                latest[key] = row
+        rows = sorted(latest.values(), key=sort_key)
+    if not with_contacts or not _has_contact_table(conn):
+        return rows
+    if day is not None:
+        have = {r["venue_key"] for r in rows}
+        with conn.cursor() as cur:
+            cur.execute("SELECT venue_key FROM contact_checks WHERE newly_reachable_on = %s "
+                        "AND status = 'reachable'", (day,))
+            extra = [k for (k,) in cur.fetchall() if k not in have]
+        if extra:
+            rows += load_rows(conn, None, open_only=True, venue_keys=extra,
+                              with_contacts=False)
+    attach_contacts(conn, rows, day)
+    rows.sort(key=sort_key)
+    return rows
+
+
+def _has_contact_table(conn) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('contact_checks') IS NOT NULL")
+        return bool(cur.fetchone()[0])
+
+
+_CHECK_FIELDS = ["venue_key", "status", "channels", "confidence_score", "confidence_label",
+                 "confidence_reason", "outreach_method", "outreach_second", "contact_kind",
+                 "contact_value", "contact_url", "maps_url", "last_checked_at",
+                 "next_check_at", "newly_reachable_on"]
+
+
+def attach_contacts(conn, rows: list[dict], day: date | None = None) -> None:
+    """Add each row's contact lookup result (apply_contact). Rows the lookup
+    never checked are left as they are."""
+    keys = sorted({r["venue_key"] for r in rows if r.get("venue_key")})
+    if not keys:
+        return
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {', '.join(_CHECK_FIELDS)} FROM contact_checks "
+                    "WHERE venue_key = ANY(%s)", (keys,))
+        checks = {r[0]: dict(zip(_CHECK_FIELDS, r)) for r in cur.fetchall()}
+    for row in rows:
+        check = checks.get(row.get("venue_key"))
+        if check:
+            apply_contact(row, check, day)
+
+
+def apply_contact(row: dict, check: dict, day: date | None = None) -> dict:
+    """Put one contact_checks row on a lead row: the status, best way to
+    reach, the contact as a link, confidence, the reason, verified links for
+    the lead tabs and a summary of unverified finds for the Waiting tab.
+    `day` is the sheet's day (today UTC if None) for the Newly reachable flag."""
+    from . import contact
+
+    day = day or datetime.now(timezone.utc).date()
+    status = check.get("status")
+    channels = []
+    for c in check.get("channels") or []:
+        known = {k: c.get(k) for k in ("kind", "value", "url", "signals", "score", "label",
+                                         "last_post")}
+        channels.append(contact.Channel(**{k: v for k, v in known.items() if v is not None}))
+    best = contact.best_channels([c for c in channels if contact.reachable(c)])
+    found = sorted((c for c in channels if not contact.reachable(c)), key=lambda c: -c.score)
+    is_reachable = status == contact.REACHABLE
+
+    def url(kind):
+        ch = best.get(kind)
+        return ch.url if ch else None
+
+    row.update({
+        "contact_status": status,
+        "contact_status_text": contact.STATUS_TEXT.get(status, status or ""),
+        "outreach_method": check.get("outreach_method"),
+        "outreach_second": check.get("outreach_second"),
+        "contact_url": check.get("contact_url") if is_reachable else None,
+        "contact_url_text": check.get("contact_value") if is_reachable else None,
+        "confidence": f"{check.get('confidence_label')} {check.get('confidence_score')}",
+        "confidence_reason": check.get("confidence_reason"),
+        "newly_reachable": (NEWLY_REACHABLE if is_reachable
+                            and check.get("newly_reachable_on") == day else ""),
+        "last_checked": check.get("last_checked_at"),
+        "next_check": check.get("next_check_at"),
+        "found_text": "; ".join(f"{contact.KIND_TEXT.get(c.kind, c.kind)}: {c.value} "
+                                f"({c.label} {c.score})" for c in found)
+                      or "Nothing found yet",
+        "verified_phone": best[contact.PHONE].value if contact.PHONE in best else None,
+        "verified_email": best[contact.EMAIL].value if contact.EMAIL in best else None,
+        "verified_website_url": url(contact.WEBSITE),
+        "verified_instagram_url": url(contact.INSTAGRAM),
+        "verified_facebook_url": url(contact.FACEBOOK),
+    })
+    return row
 
 
 def group_records(records: list[dict]) -> list[dict]:
@@ -302,8 +465,9 @@ def group_records(records: list[dict]) -> list[dict]:
 
 
 def sort_key(row: dict):
-    """Highest lead score first, then priority, market, name."""
-    return (-(row.get("lead_score") or 0), row.get("priority") or "C",
+    """Newly reachable first, then highest lead score, priority, market, name."""
+    return (not row.get("newly_reachable"), -(row.get("lead_score") or 0),
+            row.get("priority") or "C",
             row.get("market") or "", row.get("business_name") or "")
 
 

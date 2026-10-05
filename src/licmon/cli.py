@@ -383,6 +383,33 @@ def cmd_attio_sync(args) -> int:
     return 0
 
 
+def cmd_enrich(args) -> int:
+    """Look up and verify contact details for eligible venues (contact.py).
+    Never contacts a business. Skips itself without GOOGLE_PLACES_API_KEY.
+    A failed lookup logs "enrich FAILED <lookup> failed (<status>)" and the
+    run stays green. Logs counts only: Actions logs are public."""
+    from . import contact
+
+    log = logging.getLogger("licmon")
+    if not contact.configured():
+        log.info("enrich skipped (not configured): 0 venues checked")
+        return 0
+    with db.connect() as conn:
+        db.init_schema(conn)  # the contact_checks table may not exist yet
+    instagram = contact.Instagram() if contact.ig_configured() else None
+    with db.connect() as conn:
+        counts = contact.run(conn, places=contact.Places(), website=contact.Website(),
+                             instagram=instagram,
+                             cap=args.cap if args.cap is not None else contact.daily_cap())
+    log.info("enrich: checked %d (new %d, rechecks %d, backlog %d); reachable %d, newly "
+             "reachable %d, waiting %d, gave up %d; over daily cap %d; lookups failed %d; "
+             "instagram %s", counts["checked"], counts["new"], counts["recheck"],
+             counts["backlog"], counts["reachable"], counts["newly_reachable"],
+             counts["waiting"], counts["gave_up"], counts["over_cap"], counts["failed"],
+             "on" if counts["instagram"] else "off")
+    return 0
+
+
 def cmd_slack(args) -> int:
     """Ping the team's Slack channel when there are new or stage-advanced
     leads. --preview prints the message on this machine instead of posting."""
@@ -474,6 +501,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--write", action="store_true", help="really write to Attio")
     s.add_argument("--counts", metavar="FILE", help="write counts-only JSON here for Slack")
     s.set_defaults(func=cmd_attio_sync)
+
+    n = sub.add_parser("enrich", help="find and verify venue contact details for eligible "
+                                      "leads (GOOGLE_PLACES_API_KEY); contacts nobody")
+    n.add_argument("--cap", type=int, help="most venues to check now (default "
+                                           "ENRICH_DAILY_CAP or 150)")
+    n.set_defaults(func=cmd_enrich)
 
     k = sub.add_parser("slack", help="ping Slack about new leads (SLACK_WEBHOOK_URL)")
     k.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")

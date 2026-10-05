@@ -262,7 +262,10 @@ def setup(client: Client | None, write: bool) -> list[str]:
 # Sync
 # ---------------------------------------------------------------------------
 
-def _wanted(row: dict, min_b: int) -> bool:
+def eligible(row: dict, min_b: int) -> bool:
+    """Hot, tier A or tier B with lead score >= min_b; never adult, never
+    adding a permit. Also decides which venues get a contact lookup
+    (contact.py), so the two never drift."""
     if row.get("adult"):
         return False  # adult venues stay in the spreadsheet only
     if row.get("venue_history") == ADDING_PERMIT:
@@ -272,12 +275,30 @@ def _wanted(row: dict, min_b: int) -> bool:
     return row.get("priority") == "B" and (row.get("lead_score") or 0) >= min_b
 
 
-def candidates(rows: list[dict], min_b: int | None = None) -> list[dict]:
+_wanted = eligible  # older name
+
+
+def contact_checked(rows: list[dict]) -> bool:
+    """True when the contact lookup has looked at any of these venues. Until
+    it has (no Places key yet), everything works as before it existed."""
+    return any(r.get("contact_status") for r in rows)
+
+
+def candidates(rows: list[dict], min_b: int | None = None,
+               require_contact: bool | None = None) -> list[dict]:
     """Hot, tier A and strong tier B venues (not adult, not adding a permit)
-    with a venue key and a name, highest score first, one row per venue."""
+    with a venue key and a name, highest score first, one row per venue.
+
+    Once the contact lookup has run (contact_checked), only venues with
+    verified contact (contact status reachable) go: the others wait on the
+    spreadsheet's Waiting on contact tab and come back as newly reachable.
+    `require_contact=False` skips that (the lookup itself picks venues so)."""
     min_b = min_b_score() if min_b is None else min_b
+    if require_contact is None:
+        require_contact = contact_checked(rows)
     picked = [r for r in rows if r.get("venue_key") and (r.get("business_name") or "").strip()
-              and _wanted(r, min_b)]
+              and eligible(r, min_b)
+              and (not require_contact or r.get("contact_status") == "reachable")]
     picked.sort(key=lambda r: (-(r.get("lead_score") or 0), r.get("business_name") or ""))
     unique: dict[str, dict] = {}
     for row in picked:  # a venue queued twice in a day is one entry

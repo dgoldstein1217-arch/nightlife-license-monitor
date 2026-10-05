@@ -47,6 +47,23 @@ jobs:
           else
             uv run licmon run --trigger "$TRIGGER"
           fi
+      # Finds and verifies contact details (Google listing, the venue's own
+      # website, Instagram business profile) for the day's Hot, A and strong B
+      # venues, and rechecks waiting venues weekly. Contacts nobody. Skips
+      # itself until GOOGLE_PLACES_API_KEY is set; Instagram is optional. A
+      # failed lookup logs "enrich FAILED <lookup> failed (<status>)" and the
+      # run stays green. Logs counts only; contact details stay in the database.
+      - name: Look up venue contacts
+        if: ${{ !cancelled() && inputs.source == '' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GOOGLE_PLACES_API_KEY: ${{ secrets.GOOGLE_PLACES_API_KEY }}
+          IG_GRAPH_ACCESS_TOKEN: ${{ secrets.IG_GRAPH_ACCESS_TOKEN }}
+          IG_BUSINESS_ACCOUNT_ID: ${{ secrets.IG_BUSINESS_ACCOUNT_ID }}
+          ENRICH_DAILY_CAP: ${{ vars.ENRICH_DAILY_CAP || '150' }}
+          ATTIO_MIN_B_SCORE: ${{ vars.ATTIO_MIN_B_SCORE || '60' }}
+          HOT_MIN_SCORE: ${{ vars.HOT_MIN_SCORE || '75' }}
+        run: uv run licmon enrich
       # Emails the owner a short counts-only note with the Excel lead sheet attached.
       # Runs even when a source failed, so the email reports it. Skips itself
       # when the email secrets are not set, and on one-source reruns. Logs
