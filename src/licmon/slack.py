@@ -7,7 +7,10 @@ new filing or stage-advanced lead; the email still covers quiet days.
 The message holds counts plus up to five Hot venue names with city and stage.
 No addresses, phones, owners or record links, and never the name of an
 adult venue or of a venue that is only adding a permit (history.py). A
-named venue changing hands says "New owner". It goes to the owner's own team channel, never to a business.
+named venue changing hands says "New owner". A venue the contact lookup
+found a verified way to reach after waiting (contact.py) is news too, and
+is named the same way: name and city only, never the contact itself. It
+goes to the owner's own team channel, never to a business.
 
 The message text never goes to public Actions logs: callers log counts and
 "posted" / "skipped" / "failed (<ErrorType>)" only.
@@ -36,8 +39,25 @@ def configured() -> bool:
 
 
 def is_news(rows: list[dict]) -> bool:
-    """At least one new filing or stage-advanced lead."""
-    return any(r.get("whats_new") in (NEW_FILING, STAGE_ADVANCED) for r in rows)
+    """At least one new filing, stage-advanced or newly reachable lead."""
+    return any(r.get("whats_new") in (NEW_FILING, STAGE_ADVANCED) or r.get("newly_reachable")
+               for r in rows)
+
+
+def _nameable(row: dict) -> bool:
+    """Adult venues and venues only adding a permit are never named."""
+    return not row.get("adult") and row.get("venue_history") != ADDING_PERMIT
+
+
+def _names(rows: list[dict], notes) -> str:
+    rows = sorted(rows, key=lambda r: -(r.get("lead_score") or 0))
+    names = []
+    for r in rows[:MAX_HOT_NAMES]:
+        where = ", ".join(p for p in (r.get("business_name"), r.get("city")) if p)
+        extra = notes(r)
+        names.append(_esc(where) + (f" ({_esc(', '.join(extra))})" if extra else ""))
+    more = len(rows) - MAX_HOT_NAMES
+    return " · ".join(names) + (f" · and {more} more" if more > 0 else "")
 
 
 def _esc(text: str) -> str:
@@ -50,8 +70,7 @@ def compose(rows: list[dict], attio_counts: dict | None = None,
     """The message text. Hot is counted on its own; A means A and not Hot."""
     hot = [r for r in rows if r.get("hot")]
     # Adult venues and venues only adding a permit are never named.
-    named = [r for r in hot if not r.get("adult")
-             and r.get("venue_history") != ADDING_PERMIT]
+    named = [r for r in hot if _nameable(r)]
     buckets = [("Hot", len(hot))] + [
         (tier, sum(1 for r in rows if r.get("priority") == tier and not r.get("hot")))
         for tier in ("A", "B", "C")]
@@ -59,16 +78,13 @@ def compose(rows: list[dict], attio_counts: dict | None = None,
     lines = [f"New license leads: {len(rows)} today" + (f" ({parts})" if parts else "")]
 
     if named:
-        named = sorted(named, key=lambda r: -(r.get("lead_score") or 0))
-        names = []
-        for r in named[:MAX_HOT_NAMES]:
-            where = ", ".join(p for p in (r.get("business_name"), r.get("city")) if p)
-            notes = [r["stage"]] if r.get("stage") else []
-            if r.get("venue_history") == NEW_OWNER:
-                notes.append(NEW_OWNER)
-            names.append(_esc(where) + (f" ({_esc(', '.join(notes))})" if notes else ""))
-        more = len(named) - MAX_HOT_NAMES
-        lines.append("Hot: " + " · ".join(names) + (f" · and {more} more" if more > 0 else ""))
+        lines.append("Hot: " + _names(named, lambda r: ([r["stage"]] if r.get("stage") else [])
+                                      + ([NEW_OWNER] if r.get("venue_history") == NEW_OWNER
+                                         else [])))
+    newly = [r for r in rows if r.get("newly_reachable") and _nameable(r)]
+    if newly:
+        lines.append("Newly reachable (contact found on a recheck): "
+                     + _names(newly, lambda r: []))
 
     tail = []
     if attio_counts:

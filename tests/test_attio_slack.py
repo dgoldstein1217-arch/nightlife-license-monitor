@@ -206,7 +206,9 @@ def test_sync_creates_minimal_target_and_list_entry():
     assert counts == {"candidates": 1, "hot": 1, "b": 0, "created": 1, "reused": 0,
                       "added": 1, "updated": 0, "skipped": 0, "options_added": 0,
                       "b_held": 0, "permits_left_out": 0, "history_field_added": 0,
-                      "history_field_missing": False, "written": True}
+                      "history_field_missing": False, "no_contact_held": 0,
+                      "contact_fields_added": 0, "contact_fields_missing": False,
+                      "written": True}
     [target] = s.made("POST", "/objects/target_client/records")
     assert target == {"data": {"values": {
         "company_1": "Zebra Fake Lounge 1", "client_type": [{"option": "Venue"}],
@@ -257,7 +259,9 @@ def test_sync_caps_new_targets_highest_score_first():
     assert counts == {"candidates": 5, "hot": 1, "b": 0, "created": 1, "reused": 1,
                       "added": 2, "updated": 1, "skipped": 2, "options_added": 0,
                       "b_held": 0, "permits_left_out": 0, "history_field_added": 0,
-                      "history_field_missing": False, "written": True}
+                      "history_field_missing": False, "no_contact_held": 0,
+                      "contact_fields_added": 0, "contact_fields_missing": False,
+                      "written": True}
     [target] = s.made("POST", "/objects/target_client/records")
     assert target["data"]["values"]["company_1"] == "Zebra Fake Lounge 1"
     parents = [e["data"]["parent_record_id"]
@@ -547,3 +551,97 @@ def test_cli_slack_preview_refused_in_actions(monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     with pytest.raises(SystemExit):
         cli.main(["slack", "--preview"])
+
+
+# --- contact lookup (contact.py) ---
+
+def reachable_row(i, **kw):
+    base = dict(contact_status="reachable", outreach_method="Instagram DM",
+                outreach_second="Call", confidence="Verified 90",
+                confidence_reason="Google listing at the same address, same name",
+                verified_phone="(512) 555-0142",
+                verified_instagram_url="https://www.instagram.com/zebrafake/",
+                verified_website_url="https://zebrafake.test/",
+                verified_facebook_url="https://www.facebook.com/zebrafake",
+                verified_email="hello@zebrafake.test", phone="(512) 555-0199",
+                instagram_url="https://www.google.com/search?q=site%3Ainstagram.com")
+    base.update(kw)
+    return row(i, **base)
+
+
+def test_attio_sends_only_reachable_venues_once_contacts_are_checked():
+    rows = [reachable_row(1, hot=True, score=90),
+            row(2, score=80, contact_status="waiting"),
+            row(3, score=75, contact_status="gave_up"),
+            row(4, score=70)]  # not checked (over the lookup's cap): waits too
+    assert [r["venue_key"] for r in attio.candidates(rows)] == ["TX|78701|1 FAKE ST"]
+    assert len(attio.candidates(rows, require_contact=False)) == 4
+    # Nothing checked at all (no Places key yet): everything works as before.
+    assert len(attio.candidates([row(2, score=80), row(4, score=70)])) == 2
+    counts = attio.sync(None, rows, write=False)
+    assert counts["candidates"] == 1 and counts["no_contact_held"] == 3
+
+
+def test_attio_entry_carries_verified_contact_not_search_links():
+    values = attio.entry_values(reachable_row(1))
+    assert values["phone"] == "(512) 555-0142"  # never the filing phone
+    assert values["instagram_link"] == "https://www.instagram.com/zebrafake/"
+    assert values["google_link"] == "https://zebrafake.test/"
+    assert values["facebook_link"] == "https://www.facebook.com/zebrafake"
+    assert values["contact_email"] == "hello@zebrafake.test"
+    assert values["best_way_to_reach"] == "Instagram DM (then Call)"
+    assert values["contact_confidence"] == ("Verified 90. Google listing at the same "
+                                            "address, same name")
+    no_phone = attio.entry_values(reachable_row(1, verified_phone=None))
+    assert "phone" not in no_phone
+    assert set(attio.update_values(reachable_row(1))) >= {
+        "phone", "instagram_link", "best_way_to_reach", "contact_confidence"}
+    # Unchecked rows keep today's values and refresh only the old fields.
+    assert attio.entry_values(row(2, phone="(512) 555-0100"))["phone"] == "(512) 555-0100"
+    assert set(attio.update_values(row(2))) <= set(attio.UPDATE_FIELDS)
+    assert "—" not in json.dumps([a[1] for a in attio.ATTRIBUTES])
+
+
+def test_attio_adds_missing_contact_fields_before_first_write():
+    s = AttioFake()
+    counts = attio.sync(fake_client(s), [reachable_row(1, hot=True, score=90)], write=True)
+    assert counts["contact_fields_added"] == 4 and not counts["contact_fields_missing"]
+    made = [b["data"]["api_slug"] for b in s.made("POST", "/lists/license_leads/attributes")]
+    assert made == ["best_way_to_reach", "contact_confidence", "contact_email",
+                    "facebook_link"]
+    [entry] = s.made("POST", "/lists/license_leads/entries")
+    assert entry["data"]["entry_values"]["best_way_to_reach"] == "Instagram DM (then Call)"
+
+    class Refuses(AttioFake):
+        def request(self, method, url, json=None, params=None, timeout=None):
+            if method == "POST" and url.endswith("/lists/license_leads/attributes") \
+                    and json["data"]["api_slug"] != "venue_history":
+                self.calls.append((method, url.removeprefix(attio.API), json, params))
+                return FakeResp(403, {"code": "missing_scope"})
+            return super().request(method, url, json, params, timeout)
+
+    s = Refuses()
+    counts = attio.sync(fake_client(s), [reachable_row(1, hot=True, score=90)], write=True)
+    assert counts["contact_fields_missing"] and counts["added"] == 1
+    [entry] = s.made("POST", "/lists/license_leads/entries")
+    assert "best_way_to_reach" not in entry["data"]["entry_values"]
+    assert entry["data"]["entry_values"]["phone"] == "(512) 555-0142"
+    # Without checked contacts, no contact field is touched (calls as before).
+    s = AttioFake()
+    attio.sync(fake_client(s), [row(1, hot=True, score=90)], write=True)
+    assert [b["data"]["api_slug"] for b in s.made("POST", "/lists/license_leads/attributes")
+            ] == []
+
+
+def test_slack_names_newly_reachable_venues_without_contact_details():
+    rows = [reachable_row(1, hot=False, whats_new=leadsheet.DETAILS_CHANGED,
+                          newly_reachable="Newly reachable", business_name="Zebra Fake Club"),
+            reachable_row(2, newly_reachable="Newly reachable", adult=True,
+                          whats_new=leadsheet.DETAILS_CHANGED)]
+    assert slack.is_news(rows)
+    text = slack.compose(rows)
+    assert "Newly reachable (contact found on a recheck): Zebra Fake Club, Austin" in text
+    assert "Zebra Fake Lounge 2" not in text  # adult: never named
+    for secret in ("555", "zebrafake", "instagram.com", "@", "Fake St"):
+        assert secret not in text
+    assert not slack.is_news([row(1, whats_new=leadsheet.DETAILS_CHANGED)])

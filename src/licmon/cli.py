@@ -369,14 +369,19 @@ def cmd_attio_sync(args) -> int:
     log.info("attio sync%s: %d candidates (%d hot); list entries %sadded %d, %supdated %d; "
              "new Targets %d, existing Targets reused %d; skipped over daily cap %d; "
              "B leads sent %d; priority options added %d; B leads held back %d; "
-             "adding-a-permit venues left out %d; venue history field added %d",
+             "adding-a-permit venues left out %d; venue history field added %d; "
+             "held back without verified contact %d; contact fields added %d",
              "" if args.write else " (dry run)", counts["candidates"], counts["hot"],
              verb, counts["added"], verb, counts["updated"], counts["created"],
              counts["reused"], counts["skipped"], counts["b"], counts["options_added"],
-             counts["b_held"], counts["permits_left_out"], counts["history_field_added"])
+             counts["b_held"], counts["permits_left_out"], counts["history_field_added"],
+             counts["no_contact_held"], counts["contact_fields_added"])
     if counts["b_held"]:
         log.warning("attio: priority option B is missing and this key cannot add it "
                     "(needs list_configuration:read-write); B leads wait until it exists")
+    if counts["contact_fields_missing"]:
+        log.warning("attio: the contact fields are missing and this key cannot add them "
+                    "(needs list_configuration:read-write); synced without them")
     if counts["history_field_missing"]:
         log.warning("attio: the Venue history field is missing and this key cannot add "
                     "it (needs list_configuration:read-write); synced without it")

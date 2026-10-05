@@ -23,6 +23,12 @@ owner's internal CRM: nothing here contacts a business.
   field (added after the list was made). If the key may not change the
   list, the sync still runs: B leads wait, and entries go without Venue
   history.
+* Contact (contact.py): once the contact lookup has run, only venues with
+  verified contact go, and Phone, Instagram and Google hold the verified
+  phone, Instagram profile and website instead of the filing phone and
+  search links. Best way to reach, Contact confidence, Email and Facebook
+  are added to the list the same way as Venue history (before the first
+  write that needs them; entries go without them if the key may not).
 
 Endpoints and payloads follow the Attio REST API v2 reference
 (docs.attio.com/rest-api/endpoint-reference, checked 2026-09-29). Public
@@ -93,8 +99,19 @@ ATTRIBUTES: list[tuple[str, str, str, bool, list[str] | None]] = [
     ("map_link", "Map", "text", False, None),
     ("google_link", "Google", "text", False, None),
     ("instagram_link", "Instagram", "text", False, None),
+    ("best_way_to_reach", "Best way to reach", "text", False, None),
+    ("contact_confidence", "Contact confidence", "text", False, None),
+    ("contact_email", "Email", "text", False, None),
+    ("facebook_link", "Facebook", "text", False, None),
     (STATUS_ATTRIBUTE, "Status", "select", False, STATUS_OPTIONS),
 ]
+#: Fields from the contact lookup, added to an existing list when missing.
+CONTACT_ATTRIBUTES = [(slug, title) for slug, title, *_ in ATTRIBUTES
+                      if slug in ("best_way_to_reach", "contact_confidence",
+                                  "contact_email", "facebook_link")]
+#: What a repeat venue also has refreshed once its contact was checked.
+CONTACT_UPDATE_FIELDS = ("phone", "instagram_link", "google_link", "best_way_to_reach",
+                         "contact_confidence", "contact_email", "facebook_link")
 
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
@@ -340,14 +357,32 @@ def entry_values(row: dict) -> dict:
         "instagram_link": row.get("instagram_url"),
         STATUS_ATTRIBUTE: "New",
     }
+    if row.get("contact_status"):
+        # Verified values only; the filing phone may be a lawyer's.
+        method = row.get("outreach_method")
+        if method and row.get("outreach_second"):
+            method += f" (then {row['outreach_second']})"
+        confidence = row.get("confidence")
+        if confidence and row.get("confidence_reason"):
+            confidence += f". {row['confidence_reason']}"
+        values.update({
+            "phone": row.get("verified_phone"),
+            "instagram_link": row.get("verified_instagram_url"),
+            "google_link": row.get("verified_website_url"),
+            "best_way_to_reach": method,
+            "contact_confidence": confidence,
+            "contact_email": row.get("verified_email"),
+            "facebook_link": row.get("verified_facebook_url"),
+        })
     return {k: v for k, v in values.items() if v not in (None, "")}
 
 
 def update_values(row: dict) -> dict:
-    """What a repeat venue has refreshed: stage, score and priority only.
-    Never the team's Status."""
+    """What a repeat venue has refreshed: stage, score and priority (and its
+    verified contact, once checked). Never the team's Status."""
     values = entry_values(row)
-    return {k: values[k] for k in UPDATE_FIELDS if k in values}
+    fields = UPDATE_FIELDS + (CONTACT_UPDATE_FIELDS if row.get("contact_status") else ())
+    return {k: values[k] for k in fields if k in values}
 
 
 def target_values(row: dict) -> dict:
@@ -443,8 +478,29 @@ def ensure_history_attribute(client: Client) -> bool:
     return True
 
 
+def missing_contact_attributes(client: Client) -> list[tuple[str, str]]:
+    """Read-only: the contact fields the list does not have yet."""
+    listed = client.request("GET", f"/lists/{LIST_SLUG}/attributes") or {}
+    have = {a.get("api_slug") for a in listed.get("data") or [] if isinstance(a, dict)}
+    return [(slug, title) for slug, title in CONTACT_ATTRIBUTES if slug not in have]
+
+
+def ensure_contact_attributes(client: Client) -> int:
+    """Add any missing contact text field to the list. Returns how many."""
+    missing = missing_contact_attributes(client)
+    for slug, title in missing:
+        client.request("POST", f"/lists/{LIST_SLUG}/attributes",
+                       body=attribute_payload(slug, title, "text", False))
+    return len(missing)
+
+
 def _without_history(values: dict) -> dict:
     return {k: v for k, v in values.items() if k != HISTORY_ATTRIBUTE}
+
+
+def _without_contact_fields(values: dict) -> dict:
+    drop = {slug for slug, _ in CONTACT_ATTRIBUTES}
+    return {k: v for k, v in values.items() if k not in drop}
 
 
 def _is_b(row: dict) -> bool:
@@ -463,8 +519,10 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
     list_configuration:read-write), permits_left_out (adding-a-permit venues
     that would otherwise qualify), history_field_added (1 when this run made
     the Venue history field, or would in a dry run), history_field_missing (the field is missing
-    and could not be made, so entries go without it), written. Without a client (dry run with
-    no key) every venue counts as a new Target."""
+    and could not be made, so entries go without it), no_contact_held (eligible venues held
+    back because the contact lookup found no verified contact yet), contact_fields_added,
+    contact_fields_missing (same as the history field, for the contact fields), written.
+    Without a client (dry run with no key) every venue counts as a new Target."""
     cap = daily_cap() if cap is None else cap
     picks = candidates(rows, min_b)
     permits = candidates([dict(r, venue_history=None) for r in rows
@@ -473,7 +531,11 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
               "b": 0, "created": 0, "reused": 0, "added": 0, "updated": 0, "skipped": 0,
               "options_added": 0, "b_held": 0, "permits_left_out": len(permits),
               "history_field_added": 0, "history_field_missing": False,
+              "no_contact_held": len(candidates(rows, min_b, require_contact=False))
+                                 - len(picks),
+              "contact_fields_added": 0, "contact_fields_missing": False,
               "written": bool(write)}
+    with_contact = any(r.get("contact_status") for r in picks)
     if client is None:
         counts["created"] = counts["added"] = min(len(picks), cap)
         counts["skipped"] = len(picks) - counts["added"]
@@ -494,10 +556,23 @@ def sync(client: Client | None, rows: list[dict], *, write: bool,
         except AttioError:
             # Refused (scope): entries still go, without Venue history.
             counts["history_field_missing"] = True
+        if with_contact:
+            try:
+                counts["contact_fields_added"] = ensure_contact_attributes(client)
+            except AttioError:
+                counts["contact_fields_missing"] = True
     elif picks:
         # Dry run: report whether a real run would add the field (read only).
         counts["history_field_added"] = int(not has_history_attribute(client))
-    fit = _without_history if counts["history_field_missing"] else (lambda v: v)
+        if with_contact:
+            counts["contact_fields_added"] = len(missing_contact_attributes(client))
+
+    def fit(values):
+        if counts["history_field_missing"]:
+            values = _without_history(values)
+        if counts["contact_fields_missing"]:
+            values = _without_contact_fields(values)
+        return values
     targets: dict[str, str | None] = {}  # folded name -> record id, this run
     checked = False
     for row in picks:
