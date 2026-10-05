@@ -1119,3 +1119,37 @@ def test_bad_channel_is_never_used_again():
                                  FakeWebsite(None), None, TODAY, search=FakeSearch(hits),
                                  bad={"@zebrafakelounge"})
     assert not result.reachable and result.method == contact.WAIT_METHOD
+
+
+def test_run_backfills_reachable_venues_checked_before_new_fields(monkeypatch):
+    from licmon import leadsheet
+
+    cols = ("venue_key", "status", "first_checked_at", "became_reachable_at",
+            "newly_reachable_on", "gave_up_at", "next_check_at", "bad_channels", "needs_backfill")
+    stored = [("old", "reachable", NOW, NOW, None, None, None, None, True),
+              ("fresh", "reachable", NOW, NOW, None, None, None, None, False)]
+
+    class Cur(_Cur):
+        description = [type("Col", (), {"name": n}) for n in cols]
+
+        def fetchall(self):
+            return stored
+
+    class Conn(_Conn):
+        def cursor(self):
+            return Cur()
+
+    rows = {k: search_venue(venue_key=k, business_name=f"Zebra Fake {k}") for k in ("old", "fresh")}
+    asked = []
+
+    def load_rows(conn, day, venue_keys=None, **kw):
+        if venue_keys is not None:
+            asked.extend(venue_keys)
+            return [rows[k] for k in venue_keys]
+        return []
+
+    monkeypatch.setattr(leadsheet, "load_rows", load_rows)
+    saved = []
+    monkeypatch.setattr(contact, "save", lambda conn, key, result, state, now: saved.append(key))
+    contact.run(Conn(), places=FakePlaces([]), now=NOW, cap=10)
+    assert asked == ["old"] and saved == ["old"]

@@ -1287,7 +1287,8 @@ def next_state(prev: dict | None, is_reachable: bool, now: datetime,
 # ---------------------------------------------------------------------------
 
 _LOAD_SQL = """SELECT venue_key, status, first_checked_at, became_reachable_at,
-                      newly_reachable_on, gave_up_at, next_check_at, bad_channels
+                      newly_reachable_on, gave_up_at, next_check_at, bad_channels,
+                      platforms IS NULL AS needs_backfill
                FROM contact_checks"""
 
 _SAVE_SQL = """
@@ -1387,9 +1388,12 @@ def run(conn, *, places: Places, website: Website | None = None,
         cur.execute(_LOAD_SQL)
         names = [d.name for d in cur.description]
         checked = {r[0]: dict(zip(names, r)) for r in cur.fetchall()}
+    # Reachable venues are not rechecked, except once when they were checked
+    # before the platform, opening-soon and Google-type fields existed.
     due_keys = [k for k, c in sorted(checked.items(), key=lambda kv: kv[1]["next_check_at"]
                                      or now)
-                if c["status"] == WAITING and c["next_check_at"] and c["next_check_at"] <= now]
+                if (c["status"] == WAITING and c["next_check_at"] and c["next_check_at"] <= now)
+                or (c["status"] == REACHABLE and c.get("needs_backfill"))]
     today_rows = leadsheet.load_rows(conn, today, with_contacts=False)
     due_rows = (leadsheet.load_rows(conn, None, open_only=True, venue_keys=due_keys,
                                     with_contacts=False) if due_keys else [])

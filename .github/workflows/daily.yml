@@ -13,6 +13,11 @@ on:
         description: "Only this source (blank = all). e.g. ny_sla_pending"
         required: false
         default: ""
+      email_only:
+        description: "Only look up contacts and resend today's email (no collect, no Attio write, no Slack)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -33,6 +38,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --frozen --no-dev
       - name: Collect all sources
+        if: ${{ !inputs.email_only }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SOCRATA_APP_TOKEN: ${{ secrets.SOCRATA_APP_TOKEN }}
@@ -109,7 +115,7 @@ jobs:
       # Targets (internal CRM; nothing contacts a business). Skips itself when
       # ATTIO_API_KEY is not set. Logs counts only; the counts file feeds Slack.
       - name: Sync to Attio
-        if: ${{ !cancelled() && inputs.source == '' }}
+        if: ${{ !cancelled() && inputs.source == '' && !inputs.email_only }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ATTIO_API_KEY: ${{ secrets.ATTIO_API_KEY }}
@@ -120,7 +126,7 @@ jobs:
       # stage-advanced leads. Skips itself when SLACK_WEBHOOK_URL is not set.
       # The message is never printed here; the log says posted/skipped only.
       - name: Ping Slack
-        if: ${{ !cancelled() && inputs.source == '' }}
+        if: ${{ !cancelled() && inputs.source == '' && !inputs.email_only }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
