@@ -99,7 +99,7 @@ def expected_dm(angle, timing, platform, first, variant=0, where=WHERE):
         return (f"{top}\n\nI'm Dylan with Speakeasy. {product}.\n\n{para}When are you guys "
                 "opening? Would love to show you what we do before then.")
     if timing == "opening_soon":
-        top = (f"{hi} Congrats on {VENUE}! Saw you're opening {where}." if where
+        top = (f"{hi} Congrats on {VENUE}. Saw you're opening {where}." if where
                else f"{hi} Congrats on {VENUE}!")
         return (f"{top}\n\nI'm Dylan, I work at Speakeasy. {product}.\n\n{para}When's opening "
                 "night? Would love to help you guys launch.")
@@ -200,7 +200,7 @@ def test_dm_opening_soon_variants_exact():
         "regulars.\n\n"
         "When are you guys opening? Would love to show you what we do before then.")
     assert compose("dm", "bar", platform="Toast", where="on N Fake St", variant=1) == (
-        "Hey hey! Congrats on Zebra Fake Lounge! Saw you're opening on N Fake St.\n\n"
+        "Hey hey! Congrats on Zebra Fake Lounge. Saw you're opening on N Fake St.\n\n"
         "I'm Dylan, I work at Speakeasy. We help bars run ticketed events and text their "
         "regulars.\n\n"
         "Saw you guys use Toast. Happy to show you how we compare if you're curious.\n\n"
@@ -220,10 +220,10 @@ def test_without_where_the_opening_line_drops_the_place():
     assert compose("dm", where="", variant=0).split("\n\n")[0] == \
         "Hey hey! Saw Zebra Fake Lounge is opening soon. Congrats!"
     assert compose("dm", where="", variant=1).split("\n\n")[0] == \
-        "Hey hey! Congrats on Zebra Fake Lounge!"
+        "Hey hey! Congrats on Zebra Fake Lounge."
     assert compose("email", where="").split("\n\n")[2] == "Congrats on Zebra Fake Lounge!"
     assert compose("dm", where="in Austin", variant=1).split("\n\n")[0] == \
-        "Hey hey! Congrats on Zebra Fake Lounge! Saw you're opening in Austin."
+        "Hey hey! Congrats on Zebra Fake Lounge. Saw you're opening in Austin."
 
 
 def test_email_ask_local_vs_not():
@@ -282,7 +282,7 @@ def test_variant_is_stable_per_venue_and_both_occur():
     rows = [plan_row(i, stage="Approved") for i in range(40)]
     openers = {outreach.opener(r) for r in rows}
     assert any("Saw Zebra Fake Lounge is opening" in o for o in openers)
-    assert any("Congrats on Zebra Fake Lounge! Saw you're opening" in o for o in openers)
+    assert any("Congrats on Zebra Fake Lounge. Saw you're opening" in o for o in openers)
     assert outreach.opener(rows[3]) == outreach.opener(dict(rows[3]))
 
 
@@ -482,7 +482,7 @@ def test_plan_entry_has_how_and_opener():
     assert entry["second"] == "Call"
     assert entry["channel"] == "dm"
     first_line = ("Hey Jane! Saw Zebra Fake Lounge is opening on Fake St. Congrats!",
-                  "Hey Jane! Congrats on Zebra Fake Lounge! Saw you're opening on Fake St.")
+                  "Hey Jane! Congrats on Zebra Fake Lounge. Saw you're opening on Fake St.")
     assert entry["opener"].split("\n\n")[0] == \
         first_line[outreach.variant_for("TX|78701|1 FAKE ST")]
     assert "Saw you guys use SevenRooms." in entry["opener"]
@@ -533,3 +533,8 @@ def test_plan_carries_venues_nobody_has_reached_yet():
     assert plan[1]["header"].endswith("Still to reach")
     # once marked, it drops off
     assert outreach.build_plan([], [dict(old, review_status="contacted")]) == []
+
+
+def test_where_keeps_directions_in_capitals_on_mixed_case():
+    assert outreach.where_for({"address": "100 Ne 68th St"}) == "on NE 68th St"
+    assert outreach.where_for({"address": "5 Fake St"}) == "on Fake St"

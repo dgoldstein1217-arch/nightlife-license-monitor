@@ -61,7 +61,7 @@ DM_OPENERS = {
          "I'm Dylan with Speakeasy. {product}.\n\n"
          "{platform_para}When are you guys opening? Would love to show you what we do "
          "before then."),
-        ("{hi} Congrats on {venue}! Saw you're opening {where}.\n\n"
+        ("{hi} Congrats on {venue}. Saw you're opening {where}.\n\n"
          "I'm Dylan, I work at Speakeasy. {product}.\n\n"
          "{platform_para}When's opening night? Would love to help you guys launch."),
     ),
@@ -80,7 +80,7 @@ DM_OPENERS = {
 }
 #: The first DM line for opening_soon when there is no {where}, per variant.
 DM_OPENING_SOON_NO_WHERE = ("{hi} Saw {venue} is opening soon. Congrats!",
-                            "{hi} Congrats on {venue}!")
+                            "{hi} Congrats on {venue}.")
 
 #: Product sentence, picked by angle(). No final period: the openers add it.
 PRODUCT_LINES = {
@@ -415,9 +415,10 @@ _COMPASS = {"Ne": "NE", "Nw": "NW", "Se": "SE", "Sw": "SW"}
 
 
 def _title_case(text: str) -> str:
-    """Title-case ALL-CAPS text ("42ND ST" gives "42nd St"); mixed case is kept."""
+    """Title-case ALL-CAPS text ("42ND ST" gives "42nd St"); mixed case is kept,
+    except compass directions, which are always capitals ("Ne" gives "NE")."""
     if text != text.upper():
-        return text
+        return " ".join(_COMPASS.get(w.title(), w) if len(w) == 2 else w for w in text.split())
     text = re.sub(r"(\d)(St|Nd|Rd|Th)\b", lambda m: m.group(1) + m.group(2).lower(),
                   text.title())
     return " ".join(_COMPASS.get(w, w) for w in text.split())
