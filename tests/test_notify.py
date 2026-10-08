@@ -9,6 +9,8 @@ attachment, and logs stay counts-only.
 
 from __future__ import annotations
 
+import html
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -482,7 +484,15 @@ def test_contact_counts_only_once_the_lookup_has_run(fake_xlsx):
         # venues and filing phones never reach the body.
         assert "ZEBRA FAKE LOUNGE 3" not in body.upper()
         assert "ZEBRA FAKE LOUNGE 2" not in body.upper()  # reachable, nothing new
-        assert "555-010" not in body and "Zebra Stripe Way" not in body
+        assert "555-010" not in body
+        assert_street_only_in_openers(body)
+
+
+def assert_street_only_in_openers(body):
+    """The full address stays on the sheet. An opener may name the street
+    ("opening on Zebra Stripe Way"), never the house number."""
+    assert not re.search(r"\d+ Zebra Stripe Way", body)
+    assert body.count("Zebra Stripe Way") == body.count("opening on Zebra Stripe Way")
 
 
 def test_email_counts_instagram_found_by_search(fake_xlsx):
@@ -534,7 +544,8 @@ def test_email_body_has_the_plan_in_both_parts(fake_xlsx):
     assert "Second best way: Call" in plain
     assert "Contact person on the filing: Jane Q Tester" in plain
     assert "Opener (DM):\n\n" + item["opener"] in plain
-    assert item["opener"].startswith("Hey Jane,")
+    assert item["opener"].startswith("Hey Jane! ")
+    assert "on Zebra Stripe Way" in item["opener"]
     # counts block first, then the plan, then source health
     assert plain.index("By market") < plain.index("Today's plan") < plain.index("All 1 source")
     assert "Outreach results, last 30 days: contacted 2, replied 1, won 0, wrong contact 0" \
@@ -544,11 +555,12 @@ def test_email_body_has_the_plan_in_both_parts(fake_xlsx):
     assert '<a href="https://www.instagram.com/zebrafakelounge/">@zebrafakelounge</a>' \
         in html_body
     assert "<li>Uses SevenRooms: switch pitch</li>" in html_body
-    assert "Hey Jane,\n\nCongrats on the upcoming opening of Zebra Fake Lounge." in html_body
+    assert html.escape(item["opener"]) in html_body
     assert "Outreach results, last 30 days" in html_body
     for body in (plain, html_body):
         assert "Quokka" not in body and "Okapi" not in body  # not in the plan
-        assert "555-0199" not in body and "Zebra Stripe Way" not in body  # sheet only
+        assert "555-0199" not in body  # sheet only
+        assert_street_only_in_openers(body)
         assert "—" not in body
     plan_part = plain[plain.index("Today's plan"):plain.index("All 1 source")]
     assert ";" not in plan_part

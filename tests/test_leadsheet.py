@@ -6,7 +6,7 @@ from datetime import date
 
 from openpyxl import load_workbook
 
-from licmon import leadsheet
+from licmon import leadsheet, outreach
 from licmon.sources.ca_abc import CaAbcSource
 from licmon.sources.fl_abt import FlAbtSource
 from licmon.sources.wa_lcb import WaLcbSource
@@ -584,7 +584,10 @@ def test_todays_plan_tab_comes_first_with_why_how_and_opener():
     assert zebra["Best way to reach"].value == "Instagram DM"
     assert zebra["Contact"].value == "@zebrafakelounge"
     assert zebra["Contact"].hyperlink.target == "https://www.instagram.com/zebrafakelounge/"
-    assert zebra["Opener"].value.startswith("Hey Jane,\n\nCongrats on the upcoming opening")
+    assert zebra["Opener"].value.split("\n\n")[0] == (
+        "Hey Jane! Saw Zebra Fake Lounge is opening on Fake St. Congrats!",
+        "Hey Jane! Congrats on Zebra Fake Lounge! Saw you're opening on Fake St.",
+    )[outreach.variant_for("reach")]
     assert zebra["Opener"].alignment.wrap_text and zebra["Why reach out"].alignment.wrap_text
     assert zebra["Contact person"].value == "Jane Q Tester"
     assert zebra["Current platform"].value == "None found on their site"

@@ -90,7 +90,7 @@ export DATABASE_URL="$(neon cs production --project-id tiny-truth-43995411 --ssl
 | "I reached out" / "they replied" / "we won it" | `uv run licmon review <id> <id> --status contacted` (or `replied`, `won`). Each is logged with the best way to reach at that moment, for the "Outreach results, last 30 days" counts. Contacted, replied and won venues stay off the plan. Skill `review-leads`. |
 | "Mark wrong contact" / "that Instagram is not them" / "wrong number" | `uv run licmon review <id> <id> --status wrong_contact`. That contact is never suggested again, the venue moves to the Waiting tab and the next run looks it up again. If another way to reach it turns up, it comes back as Newly reachable. Skill `review-leads`. |
 | "What should I do today?" / "show me today's plan" | The daily email and the workbook's first tab, Today's plan. By hand: preview the email (row below) or export the sheet. |
-| "Change what the openers say" | Edit the constants at the top of `src/licmon/outreach.py` (greeting, timing, intro, product lines, ask, sign-off). Keep the `{venue}`, `{first}` and `{platform}` slots, run the tests, commit. No em dashes. An optional proof sentence per venue kind is a variable, not code (settings table under "The daily email"). |
+| "Change what the openers say" | Edit the constants at the top of `src/licmon/outreach.py` (DM openers, product lines, platform line, email lines and asks, call script). Keep the `{slots}` (listed in the comment above the constants), run the tests (they check the exact wording, so update them to match), commit. No em dashes or semicolons. An optional proof sentence per venue kind is a variable, not code (settings table under "The daily email"). |
 | "One row per application" / "every column" | `--per-record` or `--full` with a `.csv` file name (raw, wide layout for troubleshooting). |
 | "Show me the email" / "resend today's email" | Preview: `uv run licmon email --preview ~/Desktop/email-preview` (writes files, sends nothing. The preview holds venue names and openers, so never inside the repo). Send: only after the owner says yes, `gh workflow run daily-collect -f email_only=true` (GitHub has the email password: refreshes contact lookups and Attio statuses, sends the email, skips collecting, the Attio write and Slack), or `uv run licmon email` with the SMTP variables set (skill `email-setup`). Add `--date 2026-10-01` to either for another day. |
 | "Nothing came in today?" | An empty list is normal on quiet days. Check `uv run licmon status`: if every source says `success`, it is working. |
@@ -345,13 +345,25 @@ then Hot, then lead score. Each venue shows:
 4. **Opener**, ready to copy in the format of the best way: a DM
    (Instagram or Facebook), an email with its subject line (email or the
    website's contact form), or a call script. The wording is the owner's
-   own, in constants at the top of `outreach.py`: edit there.
+   own, in constants at the top of `outreach.py`: edit there. Each one
+   follows the timing (opening soon, just opened, new owner) and names
+   what Speakeasy does for that kind of venue. A DM for a venue opening
+   soon reads like "Hey hey! Saw <venue> is opening on N Clark St.
+   Congrats!" (or a second wording, "Hey hey! Congrats on <venue>! Saw
+   you're opening on N Clark St."); each venue always gets the same one of
+   the two, picked from its venue key. The street comes from the filing's
+   address without the house number or suite ("in <City>" when there is
+   no street, and left out when there is neither). Emails have the subject
+   "Congrats on <venue>" and sign off "Best, Dylan". Chicago venues get an
+   in-person ask (grab a coffee or stop by, swing by this week); every
+   other metro gets a call.
    `{first}` is the first name of the contact person when the filing names
    a natural person (never a company: LLC, Inc, Corp, LP, Ltd, Co,
    Company, Group, Holdings, Partners, Trust, Enterprises, digits, or a
-   venue word). Otherwise the greeting is "Hey hey," (DM) or "Hey <venue>
-   team," (email). The platform line only appears when their site shows a
-   competing platform.
+   venue word). Otherwise the greeting is "Hey hey!" (DM) or "Hey there,"
+   (email). The platform line ("Saw you guys use SevenRooms. Happy to show
+   you how we compare if you're curious.") only appears when their site
+   shows a competing platform.
 
 With no plan venues the email says "No new reachable venues today." The
 workbook's first tab, **Today's plan**, has the same venues with Priority
@@ -399,7 +411,7 @@ Settings live in the GitHub `production` environment:
 | `LEADS_EMAIL_FROM` | secret, optional | defaults to `SMTP_USERNAME` |
 | `SMTP_HOST` | variable, optional | default `smtp.gmail.com` |
 | `SMTP_PORT` | variable, optional | default `587` (use `465` for SSL-only providers) |
-| `OUTREACH_PROOF_CLUB_LOUNGE` | variable, optional | one proof sentence added to openers for clubs and lounges, on its own line after the product line. Unset by default. Real facts only, the owner writes it (never invented) |
+| `OUTREACH_PROOF_CLUB_LOUNGE` | variable, optional | one proof sentence added to openers for clubs and lounges, as its own paragraph (in a DM right after the paragraph with the product sentence, in an email or call script after the platform line). Unset by default. Real facts only, the owner writes it (never invented) |
 | `OUTREACH_PROOF_TICKETED` | variable, optional | the same for ticketed venues (comedy, live music, theaters, sports, event venues) |
 | `OUTREACH_PROOF_BAR` | variable, optional | the same for bars, taprooms and breweries |
 | `OUTREACH_PROOF_RESTAURANT` | variable, optional | the same for restaurants |

@@ -19,14 +19,15 @@ venues already reviewed as contacted, replied, won, rejected or snoozed.
 Order: new today first, then not open yet, then Hot, then lead score.
 
 Copy: the opener wording is the owner's own and lives in the constants
-below. To change what an opener says, edit those strings and keep the
-{venue}, {first} and {platform} slots. Nothing else needs to change.
+below. To change what an opener says, edit those strings and keep their
+{slots} (listed above the constants). Nothing else needs to change.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import zlib
 
 from . import contact
 from . import qualify
@@ -34,57 +35,114 @@ from . import stage as stage_mod
 from .history import ADDING_PERMIT, NEW_OWNER, NEW_VENUE
 
 # ---------------------------------------------------------------------------
-# Opener copy, in the owner's voice. Edit the words; keep the {slots}.
+# Opener copy, in the owner's voice.
+#
+# How to edit: change the words inside the quotes and keep every {slot}.
+#   {hi}        the DM greeting: DM_HI, or DM_HI_NAMED when a first name is known
+#   {first}     the contact person's first name
+#   {venue}     the venue's name
+#   {where}     "on N Clark St" from the address, or "in Chicago" without one
+#   {product}   the PRODUCT_LINES sentence for the venue, without its period
+#   {platform}  the competing platform on their site, like "SevenRooms"
+#   {platform_para} / {platform_inline}  PLATFORM_LINE when their site shows
+#               a competing platform (as its own paragraph, or inline), else
+#               nothing
+# "\n\n" is a blank line. No em dashes or semicolons in any of it.
 # ---------------------------------------------------------------------------
 
-GREETING_DM = "Hey hey,"
-GREETING_DM_NAMED = "Hey {first},"
-GREETING_EMAIL = "Hey {venue} team,"
-GREETING_EMAIL_NAMED = "Hey {first},"
+DM_HI = "Hey hey!"
+DM_HI_NAMED = "Hey {first}!"
 
-#: Timing line, picked by timing().
-TIMING_LINES = {
-    "opening_soon": "Congrats on the upcoming opening of {venue}.",
-    "just_opened": "Congrats on opening {venue}.",
-    "new_owner": "Congrats on taking over {venue}.",
+#: DM (Instagram or Facebook) by timing(). opening_soon has two variants:
+#: each venue always gets the same one (variant_for), picked from its key.
+DM_OPENERS = {
+    "opening_soon": (
+        ("{hi} Saw {venue} is opening {where}. Congrats!\n\n"
+         "I'm Dylan with Speakeasy. {product}.\n\n"
+         "{platform_para}When are you guys opening? Would love to show you what we do "
+         "before then."),
+        ("{hi} Congrats on {venue}! Saw you're opening {where}.\n\n"
+         "I'm Dylan, I work at Speakeasy. {product}.\n\n"
+         "{platform_para}When's opening night? Would love to help you guys launch."),
+    ),
+    "just_opened": (
+        ("{hi} Congrats on opening {venue}.\n\n"
+         "How have the first few weeks been?\n\n"
+         "I'm Dylan with Speakeasy. {product}. {platform_inline}Would love to show you if "
+         "you're open to it."),
+    ),
+    "new_owner": (
+        ("{hi} Congrats on taking over {venue}.\n\n"
+         "Planning any changes to the place?\n\n"
+         "I'm Dylan with Speakeasy. {product}. {platform_inline}Would love to show you what "
+         "we do."),
+    ),
 }
+#: The first DM line for opening_soon when there is no {where}, per variant.
+DM_OPENING_SOON_NO_WHERE = ("{hi} Saw {venue} is opening soon. Congrats!",
+                            "{hi} Congrats on {venue}!")
 
-INTRO_DM = "I'm Dylan, I run growth at Speakeasy."  # DMs and calls
-INTRO_EMAIL = "I'm Dylan, Head of Growth at Speakeasy."
-
-#: Product line, picked by angle().
+#: Product sentence, picked by angle(). No final period: the openers add it.
 PRODUCT_LINES = {
-    "club_lounge": ("We run tables, bottle service and the door for clubs and lounges, "
-                    "all in one place."),
-    "ticketed": ("We run ticketing, guest lists and the door for venues like yours, "
-                 "all in one place."),
-    "bar": "We help bars sell tickets to events and text their regulars, all from one place.",
-    "restaurant": "We run reservations, tables and POS in one place for spots like yours.",
+    "club_lounge": "We handle tables, bottle service and the door for clubs",
+    "ticketed": "We do ticketing and the door for venues like yours",
+    "bar": "We help bars run ticketed events and text their regulars",
+    "restaurant": "We handle reservations, tables and POS for restaurants",
 }
 
 #: Only when the venue's site shows a competing platform (contact.PLATFORMS).
-PLATFORM_LINE = "Saw you're on {platform}. Happy to show you a side by side."
+PLATFORM_LINE = "Saw you guys use {platform}. Happy to show you how we compare if you're curious."
 
-#: The ask: (first sentence, question). DMs put both on one line; emails put
-#: EMAIL_FLEX between them.
-ASKS = {
-    "opening_soon": ("Would love to grab 15 minutes before you open.",
-                     "What does your week look like?"),
-    "other": ("Would love to grab 15 minutes this week or next.", "What works for you?"),
+#: Email (and the website's contact form), one paragraph per line.
+EMAIL_SUBJECT = "Congrats on {venue}"
+GREETING_EMAIL = "Hey there,"
+GREETING_EMAIL_NAMED = "Hey {first},"
+EMAIL_FIRST_LINES = {
+    "opening_soon": "Congrats on {venue}! Saw you're opening {where}.",
+    "just_opened": "Congrats on opening {venue}!",
+    "new_owner": "Congrats on taking over {venue}!",
 }
-EMAIL_FLEX = "Happy to work around your schedule."
-EMAIL_SUBJECT = "{venue} + Speakeasy"
+EMAIL_FIRST_LINE_NO_WHERE = "Congrats on {venue}!"
+INTRO_EMAIL = "I'm Dylan, Head of Growth at Speakeasy. {product}."
+#: The ask, by (local, timing): local means the venue is in LOCAL_METROS.
+EMAIL_ASKS = {
+    (True, "opening_soon"): ("Would love to grab a coffee or stop by before you open. "
+                             "Happy to work around your schedule."),
+    (True, "other"): ("Would love to grab a coffee or stop by sometime soon. "
+                      "Happy to work around your schedule."),
+    (False, "opening_soon"): ("Would love to hop on a call before you open. "
+                              "Happy to work around your schedule."),
+    (False, "other"): ("Would love to hop on a call sometime soon. "
+                       "Happy to work around your schedule."),
+}
+EMAIL_QUESTIONS = {
+    "opening_soon": "When are you guys opening?",
+    "just_opened": "How have the first few weeks been?",
+    "new_owner": "Planning any changes to the place?",
+}
 EMAIL_SIGNOFF = "Best,\nDylan"
 
-CALL_OPEN = "Hi, this is Dylan with Speakeasy. Is the owner or GM around?"
+#: Call script, one line each, blank line between.
+CALL_OPEN = "Hey, this is Dylan from Speakeasy. Is the owner or GM around?"
+CALL_TIMING_LINES = {
+    "opening_soon": "Congrats on the new spot! When are you guys opening?",
+    "just_opened": "Congrats on opening! How have the first few weeks been?",
+    "new_owner": "Congrats on taking over! Planning any changes to the place?",
+}
+CALL_PRODUCT = "{product}."
+CALL_PLATFORM_LINE = "I know you're on {platform} right now. Happy to show you how we compare."
 CALL_ASKS = {
-    "opening_soon": "Could I get 15 minutes on your calendar before you open?",
-    "other": "Could I get 15 minutes on your calendar this week?",
+    True: "Could I swing by this week and show you?",
+    False: "Could I set up a call this week to show you?",
 }
 
+#: Metros (metros.py names) where the owner can stop by in person.
+LOCAL_METROS = {"Chicago"}
+
 #: Optional proof line per angle, one sentence, from a GitHub variable (not a
-#: secret). Unset by default; when set it goes on its own line right after
-#: the product line. Never written here: the owner supplies real proof.
+#: secret). Unset by default; when set it is its own paragraph: in a DM right
+#: after the paragraph with the product sentence, in an email or call script
+#: after the platform line. Never written here: the owner supplies real proof.
 PROOF_ENV = {
     "club_lounge": "OUTREACH_PROOF_CLUB_LOUNGE",
     "ticketed": "OUTREACH_PROOF_TICKETED",
@@ -346,31 +404,93 @@ def proof(chosen: str) -> str | None:
     return value or None
 
 
+#: Suite, unit, floor and the like: everything from here on is dropped.
+_UNIT = re.compile(r"\s*(?:,|#|\b(?:STE|SUITE|UNIT|APT|APARTMENT|FL|FLR|FLOOR|RM|ROOM|"
+                   r"BLDG|BUILDING|SPC|SPACE|LEVEL|LVL|\d+(?:ST|ND|RD|TH)\s+(?:FL|FLR|FLOOR))"
+                   r"\b\.?).*$", re.IGNORECASE)
+#: A house number: 100, 100A, 100-102, 100 1/2.
+_HOUSE_NUMBER = re.compile(r"^\d+[A-Z]?(?:\s*-\s*\d+[A-Z]?)?(?:\s+1/2)?\s+", re.IGNORECASE)
+_PO_BOX = re.compile(r"^P\.?\s*O\.?\s*BOX\b", re.IGNORECASE)
+_COMPASS = {"Ne": "NE", "Nw": "NW", "Se": "SE", "Sw": "SW"}
+
+
+def _title_case(text: str) -> str:
+    """Title-case ALL-CAPS text ("42ND ST" gives "42nd St"); mixed case is kept."""
+    if text != text.upper():
+        return text
+    text = re.sub(r"(\d)(St|Nd|Rd|Th)\b", lambda m: m.group(1) + m.group(2).lower(),
+                  text.title())
+    return " ".join(_COMPASS.get(w, w) for w in text.split())
+
+
+def where_for(row: dict) -> str:
+    """{where}: "on <street>" from the venue's address with the house number
+    and any suite, unit or floor dropped ("100 N Clark St Ste 2" gives "on N
+    Clark St"), else "in <City>", else ""."""
+    address = " ".join(str(row.get("address") or "").split())
+    street = "" if _PO_BOX.match(address) else _UNIT.sub("", _HOUSE_NUMBER.sub("", address))
+    if re.search(r"[A-Za-z]{2}", street):
+        return "on " + _title_case(street.strip())
+    city = " ".join(str(row.get("city") or "").split())
+    return "in " + _title_case(city) if city else ""
+
+
+def is_local(row: dict) -> bool:
+    """Is the venue in a metro the owner can visit (LOCAL_METROS)?"""
+    return (row.get("market") or row.get("metro")) in LOCAL_METROS
+
+
+def variant_for(venue_key: str | None) -> int:
+    """0 or 1, the same for a venue every day: crc32 of its key (Python's
+    hash() changes between runs)."""
+    return zlib.crc32(str(venue_key or "").encode("utf-8")) % 2
+
+
+def _with_proof(paragraphs: list[str], after: int, angle: str) -> list[str]:
+    """Insert the owner's proof sentence (if set) as its own paragraph."""
+    extra = proof(angle)
+    return paragraphs[:after + 1] + [extra] + paragraphs[after + 1:] if extra else paragraphs
+
+
 def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
-                   platform: str | None = None, first: str | None = None) -> str:
-    """The opener text for one channel (dm, email or call). Lines are
-    separated by a blank line. An email starts with "Subject: ..."."""
-    soon = timing == "opening_soon"
-    ask_first, ask_question = ASKS["opening_soon" if soon else "other"]
+                   platform: str | None = None, first: str | None = None,
+                   where: str = "", local: bool = False, variant: int = 0) -> str:
+    """The opener text for one channel (dm, email or call). Paragraphs are
+    separated by a blank line. An email starts with "Subject: ...".
+    `variant` (0 or 1) picks the opening_soon DM wording, `where` is
+    where_for() and `local` is is_local()."""
     product = PRODUCT_LINES[angle]
-    extra = [p for p in (proof(angle),) if p]
-    if platform:
-        extra.append(PLATFORM_LINE.format(platform=platform))
-    when = TIMING_LINES[timing].format(venue=venue)
+    platform_line = PLATFORM_LINE.format(platform=platform) if platform else ""
     if channel == EMAIL:
-        greeting = (GREETING_EMAIL_NAMED.format(first=first) if first
-                    else GREETING_EMAIL.format(venue=venue))
-        lines = ["Subject: " + EMAIL_SUBJECT.format(venue=venue), greeting, when,
-                 INTRO_EMAIL, product, *extra, ask_first, EMAIL_FLEX, ask_question,
-                 EMAIL_SIGNOFF]
-    elif channel == CALL:
-        lines = [CALL_OPEN, when, product, *extra,
-                 CALL_ASKS["opening_soon" if soon else "other"]]
-    else:
-        greeting = GREETING_DM_NAMED.format(first=first) if first else GREETING_DM
-        lines = [greeting, when, f"{INTRO_DM} {product}", *extra,
-                 f"{ask_first} {ask_question}"]
-    return "\n\n".join(lines)
+        first_line = (EMAIL_FIRST_LINE_NO_WHERE if timing == "opening_soon" and not where
+                      else EMAIL_FIRST_LINES[timing])
+        paragraphs = [
+            "Subject: " + EMAIL_SUBJECT.format(venue=venue),
+            GREETING_EMAIL_NAMED.format(first=first) if first else GREETING_EMAIL,
+            first_line.format(venue=venue, where=where),
+            INTRO_EMAIL.format(product=product), *([platform_line] if platform else [])]
+        paragraphs = _with_proof(paragraphs, len(paragraphs) - 1, angle)
+        soon = "opening_soon" if timing == "opening_soon" else "other"
+        paragraphs += [EMAIL_ASKS[(bool(local), soon)], EMAIL_QUESTIONS[timing],
+                       EMAIL_SIGNOFF]
+        return "\n\n".join(paragraphs)
+    if channel == CALL:
+        paragraphs = [CALL_OPEN, CALL_TIMING_LINES[timing], CALL_PRODUCT.format(product=product),
+                      *([CALL_PLATFORM_LINE.format(platform=platform)] if platform else [])]
+        paragraphs = _with_proof(paragraphs, len(paragraphs) - 1, angle)
+        return "\n\n".join(paragraphs + [CALL_ASKS[bool(local)]])
+    variants = DM_OPENERS[timing]
+    pick = variant % len(variants)
+    paragraphs = variants[pick].split("\n\n")
+    if timing == "opening_soon" and not where:
+        paragraphs[0] = DM_OPENING_SOON_NO_WHERE[pick]
+    after = next(i for i, p in enumerate(paragraphs) if "{product}" in p)
+    slots = {"hi": DM_HI_NAMED.format(first=first) if first else DM_HI, "venue": venue,
+             "where": where, "product": product,
+             "platform_para": platform_line + "\n\n" if platform else "",
+             "platform_inline": platform_line + " " if platform else ""}
+    paragraphs = _with_proof([p.format(**slots) for p in paragraphs], after, angle)
+    return "\n\n".join(paragraphs)
 
 
 def opener(row: dict) -> str:
@@ -381,7 +501,9 @@ def opener(row: dict) -> str:
         angle=angle(row), timing=timing(row),
         platform=_join(others[:2]) if others else None,
         # Only the trade name: a sole proprietor's company name is the person.
-        first=first_name(row.get("contact_person"), (row.get("business_name"),)))
+        first=first_name(row.get("contact_person"), (row.get("business_name"),)),
+        where=where_for(row), local=is_local(row),
+        variant=variant_for(row.get("venue_key") or row.get("business_name")))
 
 
 # ---------------------------------------------------------------------------
