@@ -188,16 +188,11 @@ def cmd_status(args) -> int:
 def cmd_plan_json(args) -> int:
     """Today's plan as JSON for the outreach dashboard. Holds lead data, so
     the file must be outside the repository; prints only the count."""
-    import hashlib
     import json
-    from pathlib import Path
 
     from . import leadsheet, notify, outreach
 
-    out = Path(args.out).expanduser().resolve()
-    repo = Path(__file__).resolve().parents[2]
-    if out == repo or repo in out.parents:
-        raise SystemExit("output must be outside the repository (lead data)")
+    out = _outside_repo(args.out)
     day = args.date or datetime.now(timezone.utc).date()
     with db.connect() as conn:
         db.init_schema(conn)
@@ -206,12 +201,67 @@ def cmd_plan_json(args) -> int:
     plan = (outreach.build_plan(data["leads"], list(data.get("open_leads") or []))
             if leadsheet.contact_checked(rows) else [])
     for item in plan:
-        key = item.get("venue_key") or item.get("name") or ""
-        item["id"] = "v" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+        item["id"] = board_id(item.get("venue_key") or item.get("name") or "")
         item["plan_date"] = day.isoformat()
     out.write_text(json.dumps(plan, default=str, indent=1), encoding="utf-8")
     print(f"plan for {day}: {len(plan)} venues -> {out} (holds lead data: keep it out of "
           "the repo)", file=sys.stderr)
+    return 0
+
+
+#: What the outreach board shows for every venue (leads-json).
+BOARD_FIELDS = ("business_name", "company", "city", "state", "market", "address", "priority",
+                "hot", "lead_score", "stage", "license", "business_type", "venue_history",
+                "whats_new", "first_seen", "filed_on", "queue_date", "contact_status_text",
+                "outreach_method", "contact_url", "contact_url_text", "confidence",
+                "contact_person", "google_says", "opening_text", "current_platform",
+                "record_url", "map_url", "lead_ids", "adult", "pipeline", "review_status")
+
+
+def board_id(venue_key: str) -> str:
+    """The outreach board's id for a venue: the same in plan-json and leads-json."""
+    import hashlib
+
+    return "v" + hashlib.sha1((venue_key or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _outside_repo(path: str):
+    from pathlib import Path
+
+    out = Path(path).expanduser().resolve()
+    repo = Path(__file__).resolve().parents[2]
+    if out == repo or repo in out.parents:
+        raise SystemExit("output must be outside the repository (lead data)")
+    return out
+
+
+def cmd_leads_json(args) -> int:
+    """Every venue ever queued (latest row each) with its score, for the
+    outreach board. Holds lead data: outside the repo; prints only counts."""
+    import json
+
+    from . import leadsheet, outreach
+
+    out = _outside_repo(args.out)
+    with db.connect() as conn:
+        db.init_schema(conn)
+        rows = leadsheet.load_rows(conn, None)
+    latest: dict[str, dict] = {}
+    for row in rows:
+        key = row.get("venue_key") or ""
+        if key not in latest or str(row.get("queue_date")) > str(latest[key].get("queue_date")):
+            latest[key] = row
+    leads = []
+    for key, row in latest.items():
+        item = {f: row.get(f) for f in BOARD_FIELDS if row.get(f) not in (None, "", [])}
+        item["id"] = board_id(key)
+        item["channel"] = (outreach.channel_for(row.get("outreach_method"))
+                           if row.get("outreach_method") else "")
+        leads.append(item)
+    leads.sort(key=lambda r: -(r.get("lead_score") or 0))
+    out.write_text(json.dumps(leads, default=str), encoding="utf-8")
+    print(f"{len(leads)} venues -> {out} (holds lead data: keep it out of the repo)",
+          file=sys.stderr)
     return 0
 
 
@@ -588,6 +638,11 @@ def main(argv: list[str] | None = None) -> int:
     pj.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
     pj.add_argument("--out", required=True, help="output .json file, outside the repo")
     pj.set_defaults(func=cmd_plan_json)
+
+    lj = sub.add_parser("leads-json", help="write every venue with its score as JSON for "
+                        "the outreach board (local only, outside the repo)")
+    lj.add_argument("--out", required=True, help="output .json file, outside the repo")
+    lj.set_defaults(func=cmd_leads_json)
 
     m = sub.add_parser("email", help="email the day's leads to the owner (SMTP env vars)")
     m.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
