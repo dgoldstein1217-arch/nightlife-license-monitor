@@ -44,6 +44,7 @@ from .history import ADDING_PERMIT, NEW_OWNER, NEW_VENUE
 #   {where}     "on N Clark St" from the address, or "in Chicago" without one
 #   {product}   the PRODUCT_LINES sentence for the venue, without its period
 #   {platform}  the competing platform on their site, like "SevenRooms"
+#   {names}     name_drops(): the three clients most like the venue
 # "\n\n" is a blank line. No em dashes or semicolons in any of it.
 # ---------------------------------------------------------------------------
 
@@ -121,35 +122,32 @@ PRODUCT_LINES = {
     "restaurant": "We handle reservations, tables and POS for restaurants",
 }
 
-#: Only when the venue's site shows a competing platform (contact.PLATFORMS).
-PLATFORM_LINE = "Saw you guys use {platform}. Happy to show you how we compare if you're curious."
 
-#: Email (and the website's contact form), one paragraph per line.
+#: Email (and the website's contact form), one paragraph per line. The DM's
+#: three beats condensed: about them, who we work with, one concrete thing,
+#: then one short question. Kept short on purpose: a broad email got
+#: nothing, a targeted one gets a reply. Pitched as an extra channel next
+#: to what they use, never a replacement.
 EMAIL_SUBJECT = "Congrats on {venue}"
 GREETING_EMAIL = "Hey there,"
 GREETING_EMAIL_NAMED = "Hey {first},"
 EMAIL_FIRST_LINES = {
-    "opening_soon": "Congrats on {venue}! Saw you're opening {where}.",
-    "just_opened": "Congrats on opening {venue}!",
-    "new_owner": "Congrats on taking over {venue}!",
+    "opening_soon": "Congrats on {venue}! Love what you guys are building {where}.",
+    "just_opened": "Congrats on opening {venue}! Really respect what you guys have built.",
+    "new_owner": "Congrats on taking over {venue}! Excited to see what you guys do with it.",
 }
-EMAIL_FIRST_LINE_NO_WHERE = "Congrats on {venue}!"
-INTRO_EMAIL = "I'm Dylan, Head of Growth at Speakeasy. {product}."
+EMAIL_FIRST_LINE_NO_WHERE = "Congrats on {venue}! Love what you guys are building."
+#: {names} is name_drops(); without any, INTRO_EMAIL_PLAIN.
+INTRO_EMAIL = "I'm Dylan with Speakeasy. We work with {names} and many more."
+INTRO_EMAIL_PLAIN = "I'm Dylan with Speakeasy."
+#: After the DM_THIRD sentence when their site shows a competing platform.
+EMAIL_PLATFORM = "Happy to run alongside {platform}, no need to switch."
 #: The ask, by (local, timing): local means the venue is in LOCAL_METROS.
 EMAIL_ASKS = {
-    (True, "opening_soon"): ("Would love to grab a coffee or stop by before you open. "
-                             "Happy to work around your schedule."),
-    (True, "other"): ("Would love to grab a coffee or stop by sometime soon. "
-                      "Happy to work around your schedule."),
-    (False, "opening_soon"): ("Would love to hop on a call before you open. "
-                              "Happy to work around your schedule."),
-    (False, "other"): ("Would love to hop on a call sometime soon. "
-                       "Happy to work around your schedule."),
-}
-EMAIL_QUESTIONS = {
-    "opening_soon": "When are you guys opening?",
-    "just_opened": "How have the first few weeks been?",
-    "new_owner": "Planning any changes to the place?",
+    (True, "opening_soon"): "Open to a quick coffee before you open?",
+    (True, "other"): "Open to a quick coffee this week or next?",
+    (False, "opening_soon"): "Open to a quick call before you open?",
+    (False, "other"): "Open to a quick call this week or next?",
 }
 EMAIL_SIGNOFF = "Best,\nDylan"
 
@@ -507,19 +505,21 @@ def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
     `variant` (0 or 1) picks the DM's first message wording, `where` is
     where_for() and `local` is is_local()."""
     product = PRODUCT_LINES[angle]
-    platform_line = PLATFORM_LINE.format(platform=platform) if platform else ""
+    names = name_drops(angle, metro, key or venue)
     if channel == EMAIL:
         first_line = (EMAIL_FIRST_LINE_NO_WHERE if timing == "opening_soon" and not where
                       else EMAIL_FIRST_LINES[timing])
+        pitch = DM_THIRD[angle] + "."
+        if platform:
+            pitch += " " + EMAIL_PLATFORM.format(platform=platform)
         paragraphs = [
             "Subject: " + EMAIL_SUBJECT.format(venue=venue),
             GREETING_EMAIL_NAMED.format(first=first) if first else GREETING_EMAIL,
             first_line.format(venue=venue, where=where),
-            INTRO_EMAIL.format(product=product), *([platform_line] if platform else [])]
+            INTRO_EMAIL.format(names=names) if names else INTRO_EMAIL_PLAIN, pitch]
         paragraphs = _with_proof(paragraphs, len(paragraphs) - 1, angle)
         soon = "opening_soon" if timing == "opening_soon" else "other"
-        paragraphs += [EMAIL_ASKS[(bool(local), soon)], EMAIL_QUESTIONS[timing],
-                       EMAIL_SIGNOFF]
+        paragraphs += [EMAIL_ASKS[(bool(local), soon)], EMAIL_SIGNOFF]
         return "\n\n".join(paragraphs)
     if channel == CALL:
         paragraphs = [CALL_OPEN, CALL_TIMING_LINES[timing], CALL_PRODUCT.format(product=product),
@@ -531,7 +531,6 @@ def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
     first_msg = variants[variant % len(variants)].format(hi=hi, venue=venue, where=where)
     second = (DM_SECOND_PLATFORM.format(platform=platform) if platform
               else DM_SECOND[timing])
-    names = name_drops(angle, metro, key or venue)
     third = "\n\n".join(_with_proof(
         [*([DM_PROOF.format(names=names)] if names else []), DM_THIRD[angle]], 1, angle))
     messages = [first_msg.rstrip(), second, third]
