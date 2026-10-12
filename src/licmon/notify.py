@@ -64,7 +64,7 @@ def load_daily(conn, day: date) -> dict:
     from . import feedback
 
     return {"leads": leads, "open_leads": open_leads, "sources": sources,
-            "outcomes": feedback.results(conn, cutoff)}
+            "outcomes": feedback.results(conn, cutoff), "board": feedback.load_board(conn)}
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +220,147 @@ def _plan_html(plan: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Outreach status: every venue the team has reached, from the board snapshot
+# ---------------------------------------------------------------------------
+
+BOARD_TITLE = "License pipeline outreach: who we reached and where each venue stands"
+BOARD_LIMIT = 60          # venues listed; the rest are counted
+BOARD_STALE_HOURS = 30    # older snapshot: say when it was last synced
+FOLLOW_GAPS = (3, 4, 7)   # days before follow-up 1, 2 and 3, as on the board
+BOARD_TZ = "America/Chicago"
+CHANNEL_NAME = {"dm": "Instagram DM", "facebook": "Facebook", "email": "Email",
+                "call": "Call", "text": "Text"}
+REPLY_NAME = {"interested": "Interested", "not_now": "Not now",
+              "not_interested": "Not interested", "referred": "Sent us to someone else"}
+
+
+def _local_day(ts) -> date | None:
+    if not ts:
+        return None
+    if isinstance(ts, str):
+        ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    from zoneinfo import ZoneInfo
+    return ts.astimezone(ZoneInfo(BOARD_TZ)).date()
+
+
+def _short(d: date | None) -> str:
+    return f"{d:%b} {d.day}" if d else ""
+
+
+def _next_due(row: dict) -> date | None:
+    """When a contacted venue is next due: the step someone set, else the
+    next follow-up in the 3, 4 and 7 day sequence. None once all are sent."""
+    if row.get("next_action_at"):
+        return _local_day(row["next_action_at"])
+    n = int(row.get("followups") or 0)
+    last = _local_day(row.get("last_touch_at") or row.get("contacted_at"))
+    if last is None or n >= len(FOLLOW_GAPS):
+        return None
+    return last + timedelta(days=FOLLOW_GAPS[n])
+
+
+def board_groups(board: list[dict], today: date) -> dict:
+    """Split the snapshot into the email's groups, each sorted."""
+    def day(r, f):
+        return _local_day(r.get(f)) or date.min
+    won = sorted((r for r in board if r["status"] == "won"),
+                 key=lambda r: day(r, "last_touch_at"), reverse=True)
+    replied = sorted((r for r in board if r["status"] == "replied"),
+                     key=lambda r: (r.get("reply_type") != "interested",
+                                    -day(r, "contacted_at").toordinal()))
+    waiting = sorted((r for r in board if r["status"] == "contacted"),
+                     key=lambda r: (_next_due(r) or date.max, r["name"]))
+    closed = [r for r in board if r["status"] in ("not_fit", "wrong_contact")]
+    due = sum(1 for r in waiting if (_next_due(r) or date.max) <= today)
+    return {"won": won, "replied": replied, "waiting": waiting, "closed": closed, "due": due}
+
+
+def _board_line(r: dict, today: date) -> str:
+    where = f"{r['name']}, {r['city']}" if r.get("city") else r["name"]
+    bits = []
+    if r["status"] == "replied":
+        bits.append(REPLY_NAME.get(r.get("reply_type") or "interested", "Replied"))
+    how = ", ".join(x for x in (CHANNEL_NAME.get(r.get("channel") or "", ""),
+                                r.get("owner") or "") if x)
+    if how:
+        bits.append(how)
+    reached = _short(_local_day(r.get("contacted_at")))
+    n = int(r.get("followups") or 0)
+    if reached:
+        bits.append(f"reached {reached}" + (f", {n} follow-up{'s' if n != 1 else ''}"
+                                            if n else ""))
+    if r["status"] in ("contacted", "replied"):
+        nxt = _next_due(r)
+        if nxt:
+            bits.append(("overdue since " if nxt < today else "due today" if nxt == today
+                         else "next ") + (_short(nxt) if nxt != today else ""))
+        elif r["status"] == "contacted":
+            bits.append("all 3 follow-ups sent")
+    line = f"{where}: " + ". ".join(b.strip() for b in bits if b.strip())
+    if r.get("note"):
+        note = " ".join(str(r["note"]).split())
+        line += ". Note: " + (note if len(note) <= 160 else note[:160].rsplit(" ", 1)[0] + "...")
+    return line
+
+
+def _board_parts(board: list[dict], now: datetime):
+    """(summary lines, [(group title, lines)], hidden count). Empty before the first sync."""
+    if not board:
+        return [], [], 0
+    today = _local_day(now)
+    g = board_groups(board, today)
+    synced_ts = max((r.get("synced_at") for r in board if r.get("synced_at")), default=None)
+    stale = synced_ts and (now - (synced_ts if not isinstance(synced_ts, str) else
+                                  datetime.fromisoformat(synced_ts.replace("Z", "+00:00")))
+                           ) > timedelta(hours=BOARD_STALE_HOURS)
+    reached = len(g["won"]) + len(g["replied"]) + len(g["waiting"]) + len(g["closed"])
+    summary = [f"{reached} license pipeline venue{'s' if reached != 1 else ''} reached so far. "
+               f"{len(g['won'])} won, {len(g['replied'])} replied, {len(g['waiting'])} waiting "
+               "on a reply" + (f" ({g['due']} due or overdue)" if g["due"] else "")
+               + (f", {len(g['closed'])} closed" if g["closed"] else "") + "."]
+    if stale:
+        summary.append(f"From the board as of {_short(_local_day(synced_ts))}. "
+                       "Anything marked since then is on the board.")
+    groups, left = [], BOARD_LIMIT
+    for title, rows in (("Won", g["won"]), ("Replied", g["replied"]),
+                        ("Waiting on a reply, soonest due first", g["waiting"])):
+        shown = rows[:max(left, 0)]
+        left -= len(shown)
+        if shown:
+            groups.append((title, [_board_line(r, today) for r in shown]))
+    hidden = len(g["won"]) + len(g["replied"]) + len(g["waiting"]) - (BOARD_LIMIT - max(left, 0))
+    return summary, groups, max(hidden, 0)
+
+
+def _board_text(board: list[dict], now: datetime) -> list[str]:
+    summary, groups, hidden = _board_parts(board, now)
+    if not summary:
+        return []
+    lines = ["", "-" * 40, BOARD_TITLE.upper(), *summary]
+    for title, rows in groups:
+        lines += ["", f"{title}:", *[f"- {x}" for x in rows]]
+    if hidden:
+        lines.append(f"And {hidden} more on the board.")
+    return lines
+
+
+def _board_html(board: list[dict], now: datetime) -> str:
+    summary, groups, hidden = _board_parts(board, now)
+    if not summary:
+        return ""
+    e = html.escape
+    out = [f"<h3 style=\"margin:24px 0 8px;\">{e(BOARD_TITLE)}</h3>",
+           "<p>" + "<br>".join(e(x) for x in summary) + "</p>"]
+    for title, rows in groups:
+        out.append(f"<p style=\"margin:12px 0 4px;\"><b>{e(title)}</b></p>"
+                   "<ul style=\"margin:0 0 8px;\">" + "".join(f"<li>{e(x)}</li>" for x in rows)
+                   + "</ul>")
+    if hidden:
+        out.append(f"<p>{e(f'And {hidden} more on the board.')}</p>")
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Compose
 # ---------------------------------------------------------------------------
 
@@ -247,6 +388,9 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     plan = (outreach.build_plan(leads, list(data.get("open_leads") or []))
             if with_plan else [])
     plan_text = [""] + _plan_text(plan) if with_plan else []
+    now = data.get("now") or datetime.now(timezone.utc)
+    board_text = _board_text(list(data.get("board") or []), now)
+    board_html = _board_html(list(data.get("board") or []), now)
     failed = sum(1 for s in sources if s.get("status") == "failed")
 
     if total == 0:
@@ -264,7 +408,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
     # ---- plain text ----
     if total == 0:
         text_lines = ["No new leads today.", *(["", *contact_lines] if contact_lines else []),
-                      *plan_text, "", source_line, "", FOOTER]
+                      *board_text, *plan_text, "", source_line, "", FOOTER]
     else:
         market_text = ", ".join(f"{name} {n}" for name, n in _markets_sorted(leads))
         text_lines = [
@@ -278,6 +422,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
             *contact_lines,
             "",
             f"By market: {market_text}",
+            *board_text,
             *plan_text,
             "",
             source_line,
@@ -303,6 +448,7 @@ def compose(data: dict, day: date, *, sender: str, recipients: list[str]) -> Ema
                  + (f"<br>{e(existing_line)}" if existing_line else "")
                  + "".join(f"<br>{e(line)}" for line in contact_lines) + "</p>")
         h.append(f"<p>{e(f'By market: {market_text}')}</p>")
+    h.append(board_html)
     if with_plan:
         h.append(_plan_html(plan))
     h.append(f"<p>{e(source_line)}</p>")

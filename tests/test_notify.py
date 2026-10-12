@@ -603,3 +603,60 @@ def test_cli_email_logs_counts_only_with_a_plan(monkeypatch, caplog):
     for secret in ("Zebra", "Quokka", "Okapi", "zebrafakelounge", "Jane", "555",
                    "owner@example.invalid"):
         assert secret not in caplog.text
+
+
+# ---- License pipeline outreach (board snapshot) ----
+
+from datetime import datetime as _dt, timezone as _tz
+
+NOW = _dt(2026, 10, 13, 15, 0, tzinfo=_tz.utc)  # 10am Chicago
+
+
+def _board_row(name, status, **kw):
+    row = {"board_id": "v" + name.lower().replace(" ", ""), "name": name, "city": "Chicago",
+           "status": status, "reply_type": None, "channel": "dm", "owner": "Alex",
+           "contacted_at": "2026-10-05T15:00:00+00:00", "last_touch_at": "2026-10-05T15:00:00+00:00",
+           "followups": 0, "next_action_at": None, "note": None,
+           "synced_at": _dt(2026, 10, 13, 13, 0, tzinfo=_tz.utc)}
+    row.update(kw)
+    return row
+
+
+def test_board_section_groups_and_stages(fake_xlsx):
+    board = [
+        _board_row("Won Room", "won", channel="email", owner="Dylan"),
+        _board_row("Maybe Lounge", "replied", reply_type="not_now"),
+        _board_row("Yes Club", "replied", reply_type="interested", next_action_at="2026-10-15T14:00:00+00:00"),
+        _board_row("Late Bar", "contacted"),  # follow-up 1 due Oct 8: overdue
+        _board_row("Fresh Bar", "contacted", contacted_at="2026-10-12T15:00:00+00:00",
+                   last_touch_at="2026-10-12T15:00:00+00:00"),  # due Oct 15
+        _board_row("Done Bar", "contacted", followups=3),
+        _board_row("Nope Bar", "not_fit"),
+    ]
+    data = sample_data(); data["board"] = board; data["now"] = NOW
+    msg = notify.compose(data, DAY, sender="s", recipients=["o"])
+    text = msg.get_body(("plain",)).get_content()
+    assert "LICENSE PIPELINE OUTREACH" in text
+    assert "7 license pipeline venues reached so far. 1 won, 2 replied, 3 waiting on a reply (1 due or overdue), 1 closed." in text
+    assert "- Won Room, Chicago: Email, Dylan. reached Oct 5" in text
+    assert text.index("Yes Club") < text.index("Maybe Lounge")  # interested first
+    assert "Yes Club, Chicago: Interested. Instagram DM, Alex. reached Oct 5. next Oct 15" in text
+    assert "Late Bar, Chicago: Instagram DM, Alex. reached Oct 5. overdue since Oct 8" in text
+    assert "Fresh Bar, Chicago: Instagram DM, Alex. reached Oct 12. next Oct 15" in text
+    assert "Done Bar, Chicago: Instagram DM, Alex. reached Oct 5, 3 follow-ups. all 3 follow-ups sent" in text
+    assert text.index("Late Bar") < text.index("Fresh Bar") < text.index("Done Bar")
+    assert "Nope Bar" not in text  # closed venues are counted, not listed
+    assert "as of" not in text  # synced 2 hours ago: not stale
+    assert "—" not in text
+    body = msg.get_body(("html",)).get_content()
+    assert "License pipeline outreach" in body and "<li>Late Bar, Chicago" in body
+
+
+def test_board_section_stale_and_absent(fake_xlsx):
+    data = sample_data(); data["now"] = NOW
+    data["board"] = [_board_row("Old Bar", "contacted", synced_at=_dt(2026, 10, 10, 13, 0, tzinfo=_tz.utc))]
+    text = notify.compose(data, DAY, sender="s", recipients=["o"]).get_body(("plain",)).get_content()
+    assert "From the board as of Oct 10." in text
+    data["board"] = []
+    text = notify.compose(data, DAY, sender="s", recipients=["o"]).get_body(("plain",)).get_content()
+    assert "LICENSE PIPELINE OUTREACH" not in text

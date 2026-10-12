@@ -315,6 +315,26 @@ def cmd_email(args) -> int:
     return 0
 
 
+def cmd_board_status(args) -> int:
+    """Replace the board snapshot (venues the team has touched) from a JSON
+    file written outside the repo by the board sync. Logs counts only."""
+    import json
+    from pathlib import Path
+
+    from . import feedback
+
+    path = Path(args.file).expanduser().resolve()
+    repo = Path(__file__).resolve().parents[2]
+    if repo in path.parents:
+        raise SystemExit("the board snapshot holds lead data: keep it outside the repository")
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    with db.connect() as conn:
+        db.init_schema(conn)
+        n = feedback.save_board(conn, rows)
+    print(f"board snapshot: {n} venue(s) saved", file=sys.stderr)
+    return 0
+
+
 def cmd_review(args) -> int:
     """Set a review status. contacted, replied, won and wrong_contact are
     also logged as outreach results with the best way to reach at the time;
@@ -656,6 +676,10 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--status", required=True, choices=REVIEW_STATUSES)
     v.add_argument("--note")
     v.set_defaults(func=cmd_review)
+
+    bs = sub.add_parser("board-status", help="save the outreach board's snapshot for the daily email")
+    bs.add_argument("file", help="JSON list of venues, written outside the repo")
+    bs.set_defaults(func=cmd_board_status)
 
     q = sub.add_parser("requalify", help="re-apply qualification rules")
     q.add_argument("--history", action="store_true",

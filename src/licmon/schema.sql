@@ -257,3 +257,22 @@ CREATE TABLE IF NOT EXISTS attio_status (
     target_status TEXT,   -- target_client.status, e.g. In conversation
     checked_at    TIMESTAMPTZ NOT NULL
 );
+
+-- The outreach board's view of every venue the team has touched (feedback.py,
+-- `licmon board-status`). A full snapshot, replaced on each board sync, so the
+-- daily email can show who reached out, how, and where each venue stands.
+CREATE TABLE IF NOT EXISTS board_status (
+    board_id       TEXT PRIMARY KEY,               -- cli.board_id(venue_key)
+    name           TEXT NOT NULL,
+    city           TEXT,
+    status         TEXT NOT NULL,                  -- contacted | replied | won | not_fit | wrong_contact
+    reply_type     TEXT,                           -- interested | not_now | not_interested | referred
+    channel        TEXT,                           -- dm | facebook | email | call | text
+    owner          TEXT,                           -- first name of whoever works it
+    contacted_at   TIMESTAMPTZ,
+    last_touch_at  TIMESTAMPTZ,
+    followups      INTEGER NOT NULL DEFAULT 0,
+    next_action_at TIMESTAMPTZ,
+    note           TEXT,
+    synced_at      TIMESTAMPTZ NOT NULL
+);

@@ -182,3 +182,41 @@ def results_lines(rows: list[tuple], days: int = RESULT_DAYS) -> list[str]:
     lines += [f"{method}: {text(counts)}" for method, counts in sorted(by_method.items())
               if text(counts)]
     return lines
+
+
+# ---------------------------------------------------------------------------
+# The outreach board's snapshot (licmon board-status), for the daily email.
+# ---------------------------------------------------------------------------
+
+BOARD_FIELDS = ("board_id", "name", "city", "status", "reply_type", "channel", "owner",
+                "contacted_at", "last_touch_at", "followups", "next_action_at", "note")
+BOARD_STATUSES = ("contacted", "replied", "won", "not_fit", "wrong_contact")
+
+
+def save_board(conn, rows: list[dict], now: datetime | None = None) -> int:
+    """Replace the board snapshot with `rows` (venues the team has touched).
+    Rows without a name or with a status outside BOARD_STATUSES are skipped.
+    Returns the number saved. Commits."""
+    now = now or datetime.now(timezone.utc)
+    keep = [r for r in rows if r.get("board_id") and r.get("name")
+            and r.get("status") in BOARD_STATUSES]
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM board_status")
+        cur.executemany(
+            f"""INSERT INTO board_status ({", ".join(BOARD_FIELDS)}, synced_at)
+                VALUES ({", ".join(["%s"] * len(BOARD_FIELDS))}, %s)""",
+            [tuple((int(r.get(f) or 0) if f == "followups" else (r.get(f) or None))
+                   for f in BOARD_FIELDS) + (now,) for r in keep])
+    conn.commit()
+    return len(keep)
+
+
+def load_board(conn) -> list[dict]:
+    """The board snapshot, or [] before the first sync."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('board_status') IS NOT NULL")
+        if not cur.fetchone()[0]:
+            return []
+        cur.execute(f"SELECT {', '.join(BOARD_FIELDS)}, synced_at FROM board_status")
+        names = [d.name for d in cur.description]
+        return [dict(zip(names, r)) for r in cur.fetchall()]
