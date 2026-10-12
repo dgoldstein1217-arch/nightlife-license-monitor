@@ -584,3 +584,14 @@ def test_plan_carries_venues_nobody_has_reached_yet():
 def test_where_keeps_directions_in_capitals_on_mixed_case():
     assert outreach.where_for({"address": "100 Ne 68th St"}) == "on NE 68th St"
     assert outreach.where_for({"address": "5 Fake St"}) == "on Fake St"
+
+
+def test_opener_key_names_channel_timing_and_wording():
+    row = plan_row(3, stage="Approved")
+    assert outreach.opener_key(row) == \
+        f"dm|opening_soon|v{outreach.variant_for(row['venue_key'])}"
+    assert outreach.opener_key(dict(row, outreach_method="Call")) == "call|opening_soon"
+    assert outreach.opener_key(dict(row, venue_history=NEW_OWNER, stage="Licensed")) == \
+        "dm|new_owner|v0"
+    [entry] = outreach.build_plan([row])
+    assert entry["opener_key"] == outreach.opener_key(row)

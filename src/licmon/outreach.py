@@ -545,6 +545,18 @@ def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
     return "\n\n".join(DM_LABEL.format(n=n) + "\n" + m for n, m in enumerate(messages, 1))
 
 
+def opener_key(row: dict) -> str:
+    """Which opener wording a venue got, for counting replies by opener:
+    channel, timing and (for a DM's first message) the wording, like
+    "dm|opening_soon|v1". Calls and emails have one wording per timing."""
+    channel = channel_for(row.get("outreach_method"))
+    t = timing(row)
+    if channel != DM:
+        return f"{channel}|{t}"
+    variant = variant_for(row.get("venue_key") or row.get("business_name"))
+    return f"{channel}|{t}|v{variant % len(DM_FIRST[t])}"
+
+
 def opener(row: dict) -> str:
     """The opener for this venue's best way to reach it."""
     others = competitors(row)
@@ -626,6 +638,7 @@ def entry(row: dict, order: int, new_today: bool = False) -> dict:
         "opening_text": row.get("opening_text") or "",
         "newly_reachable": bool(row.get("newly_reachable")), "new_today": new_today,
         "lead_ids": row.get("lead_ids") or "", "venue_key": row.get("venue_key"),
+        "opener_key": opener_key(row), "angle": angle(row),
     }
 
 

@@ -185,6 +185,36 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_plan_json(args) -> int:
+    """Today's plan as JSON for the outreach dashboard. Holds lead data, so
+    the file must be outside the repository; prints only the count."""
+    import hashlib
+    import json
+    from pathlib import Path
+
+    from . import leadsheet, notify, outreach
+
+    out = Path(args.out).expanduser().resolve()
+    repo = Path(__file__).resolve().parents[2]
+    if out == repo or repo in out.parents:
+        raise SystemExit("output must be outside the repository (lead data)")
+    day = args.date or datetime.now(timezone.utc).date()
+    with db.connect() as conn:
+        db.init_schema(conn)
+        data = notify.load_daily(conn, day)
+    rows = data["leads"] + list(data.get("open_leads") or [])
+    plan = (outreach.build_plan(data["leads"], list(data.get("open_leads") or []))
+            if leadsheet.contact_checked(rows) else [])
+    for item in plan:
+        key = item.get("venue_key") or item.get("name") or ""
+        item["id"] = "v" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+        item["plan_date"] = day.isoformat()
+    out.write_text(json.dumps(plan, default=str, indent=1), encoding="utf-8")
+    print(f"plan for {day}: {len(plan)} venues -> {out} (holds lead data: keep it out of "
+          "the repo)", file=sys.stderr)
+    return 0
+
+
 def cmd_email(args) -> int:
     """Email the day's leads to the owner, or write a local preview.
 
@@ -552,6 +582,12 @@ def main(argv: list[str] | None = None) -> int:
                    help="every stored column instead of the clean lead sheet (CSV)")
     e.add_argument("--out", help="output file; .xlsx = Excel, else CSV (default stdout)")
     e.set_defaults(func=cmd_export)
+
+    pj = sub.add_parser("plan-json", help="write today's plan as JSON for the outreach "
+                        "dashboard (local only, outside the repo)")
+    pj.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
+    pj.add_argument("--out", required=True, help="output .json file, outside the repo")
+    pj.set_defaults(func=cmd_plan_json)
 
     m = sub.add_parser("email", help="email the day's leads to the owner (SMTP env vars)")
     m.add_argument("--date", type=date.fromisoformat, help="queue date, default today UTC")
