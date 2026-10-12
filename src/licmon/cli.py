@@ -214,6 +214,7 @@ BOARD_FIELDS = ("business_name", "company", "city", "state", "market", "address"
                 "hot", "lead_score", "stage", "license", "business_type", "venue_history",
                 "whats_new", "first_seen", "filed_on", "queue_date", "contact_status_text",
                 "outreach_method", "contact_url", "contact_url_text", "confidence",
+                "confidence_reason",
                 "contact_person", "google_says", "opening_text", "current_platform",
                 "record_url", "map_url", "lead_ids", "adult", "pipeline", "review_status")
 

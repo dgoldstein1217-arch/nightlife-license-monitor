@@ -631,6 +631,7 @@ def entry(row: dict, order: int, new_today: bool = False) -> dict:
         "stage": row.get("stage"), "tier": tier_label(row), "header": header,
         "why": why(row), "method": method, "contact": contact_text,
         "contact_url": row.get("contact_url"), "confidence": row.get("confidence"),
+        "confidence_reason": row.get("confidence_reason") or "",
         "how": how, "second": row.get("outreach_second") or "",
         "channel": channel_for(method), "opener": opener(row),
         "contact_person": row.get("contact_person") or "",
@@ -639,6 +640,8 @@ def entry(row: dict, order: int, new_today: bool = False) -> dict:
         "newly_reachable": bool(row.get("newly_reachable")), "new_today": new_today,
         "lead_ids": row.get("lead_ids") or "", "venue_key": row.get("venue_key"),
         "opener_key": opener_key(row), "angle": angle(row),
+        "names": name_drops(angle(row), row.get("market") or row.get("metro"),
+                            row.get("venue_key") or row.get("business_name") or ""),
     }
 
 
