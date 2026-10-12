@@ -62,7 +62,8 @@ DM_FIRST = {
         "{hi}\n\nRan across your page and love what you guys are building {where}",
         "{hi}\n\nCongrats on {venue}! Love what you guys are putting together {where}",
     ),
-    "just_opened": ("{hi}\n\nRan across your page and love what you guys have going at {venue}",),
+    "just_opened": ("{hi}\n\nRan across your page and love what you guys have going at {venue}",
+                    "{hi}\n\nReally respect what you guys have built with {venue}"),
     "new_owner": ("{hi}\n\nCongrats on taking over {venue}! Excited to see what you guys do "
                   "with it",),
 }
@@ -78,7 +79,9 @@ DM_SECOND = {
 }
 DM_SECOND_PLATFORM = ("Saw you guys use {platform} and was curious if you've ever seen our "
                       "platform @spkeasy")
-#: Message 3 by angle(): one concrete thing, not a feature list.
+#: Message 3 opens with the clients we name (name_drops), then one concrete
+#: thing by angle(), not a feature list.
+DM_PROOF = "We work with some of the top event organizers and venues in the US ({names}, & many more)"
 DM_THIRD = {
     "club_lounge": ("I think our table and bottle service booking could be a great touch "
                     "for your nights"),
@@ -89,6 +92,24 @@ DM_THIRD = {
     "restaurant": ("I think our reservations and table booking could be a great touch "
                    "for you guys"),
 }
+#: Real Speakeasy clients we name in a DM: (name, angles it fits, metros
+#: it is in). Sources: Speakeasy's knowledge base and the owner's own DMs.
+#: Only add a client the owner says we can name.
+NAME_DROPS = (
+    ("Tao Group", {"club_lounge", "restaurant", "bar"}, {"Chicago", "New York City"}),
+    ("Lettuce Entertain You", {"restaurant", "bar"}, {"Chicago"}),
+    ("Groot Hospitality", {"club_lounge", "restaurant"},
+     {"Miami-Fort Lauderdale-West Palm Beach"}),
+    ("Club Space", {"club_lounge", "ticketed"}, {"Miami-Fort Lauderdale-West Palm Beach"}),
+    ("Sable", {"club_lounge"}, {"Miami-Fort Lauderdale-West Palm Beach"}),
+    ("Nebula", {"club_lounge"}, {"New York City"}),
+    ("LIV", {"club_lounge"}, set()),
+    ("Breakaway Festival", {"ticketed", "bar"}, set()),
+    ("Live Nation", {"ticketed"}, set()),
+    ("Barstool", {"bar", "ticketed"}, set()),
+)
+NAME_DROP_COUNT = 3
+
 #: Heads each message in the email and the workbook so each is sent alone.
 DM_LABEL = "DM {n} of 3:"
 
@@ -463,13 +484,27 @@ def _with_proof(paragraphs: list[str], after: int, angle: str) -> list[str]:
     return paragraphs[:after + 1] + [extra] + paragraphs[after + 1:] if extra else paragraphs
 
 
+def name_drops(angle: str, metro: str | None, key: str) -> str:
+    """The clients most like this venue, as "A, B, C": same kind and same
+    metro first, then same kind, then same metro. Ties are mixed per venue
+    (crc32 of its key), so venues of one kind do not all read the same."""
+    def rank(item):
+        name, angles, metros = item
+        return (-(2 * (angle in angles) + (metro in metros)),
+                zlib.crc32(f"{key}|{name}".encode("utf-8")))
+    fits = [d for d in NAME_DROPS if angle in d[1] or metro in d[2]]
+    return ", ".join(name for name, _, _ in sorted(fits, key=rank)[:NAME_DROP_COUNT])
+
+
 def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
                    platform: str | None = None, first: str | None = None,
-                   where: str = "", local: bool = False, variant: int = 0) -> str:
+                   where: str = "", local: bool = False, variant: int = 0,
+                   metro: str | None = None, key: str | None = None) -> str:
     """The opener text for one channel (dm, email or call). Paragraphs are
     separated by a blank line. An email starts with "Subject: ...". A DM is
     three messages, each headed DM_LABEL.
-    `variant` (0 or 1) picks the opening_soon DM wording, `where` is
+    `metro` and `key` (the venue key) pick the DM's name drops.
+    `variant` (0 or 1) picks the DM's first message wording, `where` is
     where_for() and `local` is is_local()."""
     product = PRODUCT_LINES[angle]
     platform_line = PLATFORM_LINE.format(platform=platform) if platform else ""
@@ -496,7 +531,9 @@ def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
     first_msg = variants[variant % len(variants)].format(hi=hi, venue=venue, where=where)
     second = (DM_SECOND_PLATFORM.format(platform=platform) if platform
               else DM_SECOND[timing])
-    third = "\n\n".join(_with_proof([DM_THIRD[angle]], 0, angle))
+    names = name_drops(angle, metro, key or venue)
+    third = "\n\n".join(_with_proof(
+        [*([DM_PROOF.format(names=names)] if names else []), DM_THIRD[angle]], 1, angle))
     messages = [first_msg.rstrip(), second, third]
     return "\n\n".join(DM_LABEL.format(n=n) + "\n" + m for n, m in enumerate(messages, 1))
 
@@ -511,7 +548,8 @@ def opener(row: dict) -> str:
         # Only the trade name: a sole proprietor's company name is the person.
         first=first_name(row.get("contact_person"), (row.get("business_name"),)),
         where=where_for(row), local=is_local(row),
-        variant=variant_for(row.get("venue_key") or row.get("business_name")))
+        variant=variant_for(row.get("venue_key") or row.get("business_name")),
+        metro=row.get("market") or row.get("metro"), key=row.get("venue_key"))
 
 
 # ---------------------------------------------------------------------------

@@ -353,9 +353,13 @@ then Hot, then lead score. Each venue shows:
    love what you guys are building on N Clark St", or a second wording,
    "Congrats on <venue>! Love what you guys are putting together on N
    Clark St"), 2 says what we noticed and asks if they have seen
-   @spkeasy, 3 is one concrete thing for that kind of venue. No intro and
-   no meeting ask. Modeled on a three-message DM that got a reply
-   (2026-10). Each venue always gets the same one of
+   @spkeasy, 3 names three real clients most like the venue (same kind
+   first, then same city, from `NAME_DROPS`: "We work with some of the top
+   event organizers and venues in the US (Tao Group, Club Space, Nebula, &
+   many more)") and then one concrete thing for that kind of venue. Only
+   add a client to `NAME_DROPS` that the owner says we can name. No meeting
+   ask. Modeled on two DMs that got replies (2026-10). Each venue always
+   gets the same one of
    the two, picked from its venue key. The street comes from the filing's
    address without the house number or suite ("in <City>" when there is
    no street, and left out when there is neither). Emails have the subject

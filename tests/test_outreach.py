@@ -91,7 +91,8 @@ PLATFORM = "Saw you guys use SevenRooms. Happy to show you how we compare if you
 DM_FIRST = {
     "opening_soon": ("Ran across your page and love what you guys are building",
                      f"Congrats on {VENUE}! Love what you guys are putting together"),
-    "just_opened": (f"Ran across your page and love what you guys have going at {VENUE}",),
+    "just_opened": (f"Ran across your page and love what you guys have going at {VENUE}",
+                    f"Really respect what you guys have built with {VENUE}"),
     "new_owner": (f"Congrats on taking over {VENUE}! Excited to see what you guys do with it",),
 }
 DM_SECOND = {
@@ -119,7 +120,12 @@ def expected_dm(angle, timing, platform, first, variant=0, where=WHERE):
         top += " " + where
     second = (f"Saw you guys use {platform}" if platform else DM_SECOND[timing]) + CURIOUS
     return (f"DM 1 of 3:\n{hi}\n\n{top}\n\nDM 2 of 3:\n{second}\n\n"
-            f"DM 3 of 3:\n{DM_THIRD[angle]}")
+            f"DM 3 of 3:\n{proof_line(angle)}\n\n{DM_THIRD[angle]}")
+
+
+def proof_line(angle, metro=None, key=VENUE):
+    return ("We work with some of the top event organizers and venues in the US ("
+            + outreach.name_drops(angle, metro, key) + ", & many more)")
 
 
 FIRST_LINE = {
@@ -178,8 +184,8 @@ def assert_clean(text):
     (0, 1))))
 def test_dm_opener(angle, timing, platform, first, variant):
     text = compose("dm", angle, timing, platform, first, where=WHERE, variant=variant)
-    # Only opening_soon has two variants.
-    want_variant = variant if timing == "opening_soon" else 0
+    # new_owner has one wording, the others two.
+    want_variant = 0 if timing == "new_owner" else variant
     assert text == expected_dm(angle, timing, platform, first, want_variant)
     assert_clean(text)
 
@@ -210,15 +216,41 @@ def test_dm_opening_soon_variants_exact():
         "Ran across your page and love what you guys are building on N Fake St\n\n"
         "DM 2 of 3:\nSaw you guys are opening soon and was curious if you've ever seen our "
         "platform @spkeasy\n\n"
-        "DM 3 of 3:\nI think ticketed nights plus texting your regulars could be a great "
+        "DM 3 of 3:\n" + proof_line("bar") + "\n\n"
+        "I think ticketed nights plus texting your regulars could be a great "
         "touch for you guys")
     assert compose("dm", "bar", platform="Toast", where="on N Fake St", variant=1) == (
         "DM 1 of 3:\nHey team!\n\n"
         "Congrats on Zebra Fake Lounge! Love what you guys are putting together on N Fake St"
         "\n\nDM 2 of 3:\nSaw you guys use Toast and was curious if you've ever seen our "
         "platform @spkeasy\n\n"
-        "DM 3 of 3:\nI think ticketed nights plus texting your regulars could be a great "
+        "DM 3 of 3:\n" + proof_line("bar") + "\n\n"
+        "I think ticketed nights plus texting your regulars could be a great "
         "touch for you guys")
+
+
+def test_name_drops_are_the_most_similar_clients():
+    # Same kind and same city first, then same kind.
+    assert outreach.name_drops("restaurant", "Chicago", "IL|1").split(", ")[:2] in (
+        ["Tao Group", "Lettuce Entertain You"], ["Lettuce Entertain You", "Tao Group"])
+    assert outreach.name_drops("club_lounge", "Chicago", "IL|1").startswith("Tao Group, ")
+    miami = set(outreach.name_drops("club_lounge", "Miami-Fort Lauderdale-West Palm Beach",
+                                    "FL|1").split(", "))
+    assert miami == {"Club Space", "Groot Hospitality", "Sable"}
+    # Never a client of another kind while three of the same kind exist.
+    for angle in ("club_lounge", "ticketed", "bar", "restaurant"):
+        for metro in (None, "Chicago", "Austin", "New York City"):
+            names = outreach.name_drops(angle, metro, "X|1").split(", ")
+            fits = {n for n, angles, _ in outreach.NAME_DROPS if angle in angles}
+            assert len(names) == 3 and set(names) <= fits
+    # Mixed per venue, stable for one venue.
+    picks = {outreach.name_drops("club_lounge", "Austin", f"TX|{i}") for i in range(30)}
+    assert len(picks) > 1
+    assert outreach.name_drops("bar", "Austin", "TX|9") == \
+        outreach.name_drops("bar", "Austin", "TX|9")
+    row = plan_row(9, market="Chicago", venue_key="IL|60601|9 FAKE ST", priority="B",
+                   google_type="restaurant")
+    assert proof_line("restaurant", "Chicago", "IL|60601|9 FAKE ST") in outreach.opener(row)
 
 
 def test_dm_is_three_messages_with_no_intro_or_meeting_ask():
@@ -326,7 +358,8 @@ def test_opener_proof_line_from_settings_only(monkeypatch):
     proof = "Zebra Fake Proof sold out 3 nights."
     # DM: its own paragraph at the end of message 3.
     dm = compose("dm", "club_lounge", "opening_soon", platform="DICE", variant=0)
-    assert dm.split("DM 3 of 3:\n")[1] == DM_THIRD["club_lounge"] + "\n\n" + proof
+    assert dm.split("DM 3 of 3:\n")[1] == (proof_line("club_lounge") + "\n\n"
+                                            + DM_THIRD["club_lounge"] + "\n\n" + proof)
     assert "DICE" in dm.split("DM 2 of 3:")[1]
     # Email and call: after the platform line, before the ask.
     email = compose("email", "club_lounge", "just_opened", platform="DICE").split("\n\n")
