@@ -363,14 +363,15 @@ then Hot, then lead score. Each venue shows:
    the two, picked from its venue key. The street comes from the filing's
    address without the house number or suite ("in <City>" when there is
    no street, and left out when there is neither). Emails have the subject
-   "Congrats on <venue>", are the DM condensed to four short lines (about
+   "<venue> tables" (tickets, events or reservations by venue kind), are the DM condensed to four short lines (about
    them, "I'm Dylan with Speakeasy. We work with <the same name drops> and
    many more.", the one concrete thing plus "Happy to run alongside
-   <platform>, no need to switch." when they use one, one short question)
+   <platform>, no need to switch." when they use one, one short interest question, never a meeting ask)
    and sign off "Best, Dylan". From the owner's notes: a broad email got
    nothing, a targeted one works, and Speakeasy is pitched as an extra
-   channel, never a replacement. Chicago venues get a coffee ask, every
-   other metro a call ("Open to a quick call this week or next?"). Call
+   channel, never a replacement. The ask is "Worth a look?" ("before you
+   open" for venues not open yet), plus "Happy to swing by." for Chicago
+   venues. Rules from the `cold-email` skill. Call
    scripts are unchanged: Chicago gets "swing by this week".
    `{first}` is the first name of the contact person when the filing names
    a natural person (never a company: LLC, Inc, Corp, LP, Ltd, Co,

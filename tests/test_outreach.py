@@ -135,13 +135,18 @@ FIRST_LINE = {
 }
 
 
+SUBJECT = {"club_lounge": "tables", "ticketed": "tickets", "bar": "events",
+           "restaurant": "reservations"}
+
+
 def expected_email(angle, timing, platform, first, local=False):
-    when = "before you open" if timing == "opening_soon" else "this week or next"
-    ask = ("Open to a quick coffee " if local else "Open to a quick call ") + when + "?"
+    ask = "Worth a look before you open?" if timing == "opening_soon" else "Worth a look?"
+    if local:
+        ask += " Happy to swing by."
     pitch = DM_THIRD[angle] + "."
     if platform:
         pitch += f" Happy to run alongside {platform}, no need to switch."
-    lines = [f"Subject: Congrats on {VENUE}", f"Hey {first}," if first else "Hey there,",
+    lines = [f"Subject: {VENUE} {SUBJECT[angle]}", f"Hey {first}," if first else "Hey there,",
              FIRST_LINE[timing],
              f"I'm Dylan with Speakeasy. We work with {outreach.name_drops(angle, None, VENUE)} "
              "and many more.", pitch, ask, "Best,\nDylan"]
@@ -274,8 +279,8 @@ def test_without_where_the_opening_line_drops_the_place():
 def test_email_ask_local_vs_not():
     local = compose("email", "bar", "new_owner", local=True).split("\n\n")
     away = compose("email", "bar", "new_owner", local=False).split("\n\n")
-    assert local[-2] == "Open to a quick coffee this week or next?"
-    assert away[-2] == "Open to a quick call this week or next?"
+    assert local[-2] == "Worth a look? Happy to swing by."
+    assert away[-2] == "Worth a look?"
     assert compose("call", local=True).endswith("Could I swing by this week and show you?")
     assert compose("call").endswith("Could I set up a call this week to show you?")
 
@@ -335,13 +340,13 @@ def test_opener_from_row_uses_where_local_and_platform():
                    address="7 N Fake St Ste 1", city="Chicago", market="Chicago",
                    stage="Licensed", platforms=["Toast"])
     assert outreach.opener(row) == (
-        "Subject: Congrats on Zebra Fake Lounge\n\nHey Jane,\n\n"
+        "Subject: Zebra Fake Lounge tables\n\nHey Jane,\n\n"
         "Congrats on opening Zebra Fake Lounge! Really respect what you guys have built.\n\n"
         "I'm Dylan with Speakeasy. We work with "
         + outreach.name_drops("club_lounge", "Chicago", row["venue_key"]) + " and many more."
         "\n\nI think our table and bottle service booking could be a great touch for your "
         "nights. Happy to run alongside Toast, no need to switch.\n\n"
-        "Open to a quick coffee this week or next?\n\nBest,\nDylan")
+        "Worth a look? Happy to swing by.\n\nBest,\nDylan")
     call = outreach.opener(dict(row, outreach_method="Call", market="Austin",
                                 venue_history=NEW_OWNER))
     assert call.endswith("Could I set up a call this week to show you?")
@@ -360,7 +365,7 @@ def test_opener_proof_line_from_settings_only(monkeypatch):
     email = compose("email", "club_lounge", "just_opened", platform="DICE").split("\n\n")
     assert email[4:7] == [
         DM_THIRD["club_lounge"] + ". Happy to run alongside DICE, no need to switch.", proof,
-        "Open to a quick call this week or next?"]
+        "Worth a look?"]
     call = compose("call", "club_lounge", "just_opened").split("\n\n")
     assert call[2:4] == [PRODUCT["club_lounge"] + ".", proof]
     # Another angle's proof is never borrowed.
@@ -533,7 +538,7 @@ def test_plan_entry_has_how_and_opener():
                                           contact_url="mailto:hi@zebrafake.test",
                                           contact_url_text="hi@zebrafake.test",
                                           newly_reachable="Newly reachable")])[0]
-    assert email["opener"].startswith("Subject: Congrats on Zebra Fake Lounge\n\nHey there,\n\n"
+    assert email["opener"].startswith("Subject: Zebra Fake Lounge tables\n\nHey there,\n\n"
                                       "Congrats on Zebra Fake Lounge! Love what you guys are "
                                       "building on Fake St.")
     assert email["header"].endswith("| Newly reachable")

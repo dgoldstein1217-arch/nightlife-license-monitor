@@ -125,10 +125,17 @@ PRODUCT_LINES = {
 
 #: Email (and the website's contact form), one paragraph per line. The DM's
 #: three beats condensed: about them, who we work with, one concrete thing,
-#: then one short question. Kept short on purpose: a broad email got
+#: then one short interest question (skill cold-email: no meeting ask in a
+#: first touch, a boring 2 to 4 word subject). Kept short on purpose: a broad email got
 #: nothing, a targeted one gets a reply. Pitched as an extra channel next
 #: to what they use, never a replacement.
-EMAIL_SUBJECT = "Congrats on {venue}"
+#: Subject by angle(): 2 to 4 words that look internal, no pitch.
+EMAIL_SUBJECTS = {
+    "club_lounge": "{venue} tables",
+    "ticketed": "{venue} tickets",
+    "bar": "{venue} events",
+    "restaurant": "{venue} reservations",
+}
 GREETING_EMAIL = "Hey there,"
 GREETING_EMAIL_NAMED = "Hey {first},"
 EMAIL_FIRST_LINES = {
@@ -143,11 +150,12 @@ INTRO_EMAIL_PLAIN = "I'm Dylan with Speakeasy."
 #: After the DM_THIRD sentence when their site shows a competing platform.
 EMAIL_PLATFORM = "Happy to run alongside {platform}, no need to switch."
 #: The ask, by (local, timing): local means the venue is in LOCAL_METROS.
+#: Asks for interest, not a meeting: a one-word yes is enough.
 EMAIL_ASKS = {
-    (True, "opening_soon"): "Open to a quick coffee before you open?",
-    (True, "other"): "Open to a quick coffee this week or next?",
-    (False, "opening_soon"): "Open to a quick call before you open?",
-    (False, "other"): "Open to a quick call this week or next?",
+    (True, "opening_soon"): "Worth a look before you open? Happy to swing by.",
+    (True, "other"): "Worth a look? Happy to swing by.",
+    (False, "opening_soon"): "Worth a look before you open?",
+    (False, "other"): "Worth a look?",
 }
 EMAIL_SIGNOFF = "Best,\nDylan"
 
@@ -513,7 +521,7 @@ def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
         if platform:
             pitch += " " + EMAIL_PLATFORM.format(platform=platform)
         paragraphs = [
-            "Subject: " + EMAIL_SUBJECT.format(venue=venue),
+            "Subject: " + EMAIL_SUBJECTS[angle].format(venue=venue),
             GREETING_EMAIL_NAMED.format(first=first) if first else GREETING_EMAIL,
             first_line.format(venue=venue, where=where),
             INTRO_EMAIL.format(names=names) if names else INTRO_EMAIL_PLAIN, pitch]
