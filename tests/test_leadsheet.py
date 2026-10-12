@@ -584,9 +584,9 @@ def test_todays_plan_tab_comes_first_with_why_how_and_opener():
     assert zebra["Best way to reach"].value == "Instagram DM"
     assert zebra["Contact"].value == "@zebrafakelounge"
     assert zebra["Contact"].hyperlink.target == "https://www.instagram.com/zebrafakelounge/"
-    assert zebra["Opener"].value.split("\n\n")[0] == (
-        "Hey Jane! Saw Zebra Fake Lounge is opening on Fake St. Congrats!",
-        "Hey Jane! Congrats on Zebra Fake Lounge. Saw you're opening on Fake St.",
+    assert zebra["Opener"].value.split("\n\n")[1] == (
+        "Ran across your page and love what you guys are building on Fake St",
+        "Congrats on Zebra Fake Lounge! Love what you guys are putting together on Fake St",
     )[outreach.variant_for("reach")]
     assert zebra["Opener"].alignment.wrap_text and zebra["Why reach out"].alignment.wrap_text
     assert zebra["Contact person"].value == "Jane Q Tester"

@@ -88,27 +88,38 @@ WHERE = "on N Fake St"
 PLATFORM = "Saw you guys use SevenRooms. Happy to show you how we compare if you're curious."
 
 
+DM_FIRST = {
+    "opening_soon": ("Ran across your page and love what you guys are building",
+                     f"Congrats on {VENUE}! Love what you guys are putting together"),
+    "just_opened": (f"Ran across your page and love what you guys have going at {VENUE}",),
+    "new_owner": (f"Congrats on taking over {VENUE}! Excited to see what you guys do with it",),
+}
+DM_SECOND = {
+    "opening_soon": "Saw you guys are opening soon",
+    "just_opened": "Saw you guys just opened",
+    "new_owner": "Saw you guys just took over",
+}
+DM_THIRD = {
+    "club_lounge": "I think our table and bottle service booking could be a great touch "
+                   "for your nights",
+    "ticketed": "I think our fully white labeled ticketing pages could be a great touch "
+                "for your events",
+    "bar": "I think ticketed nights plus texting your regulars could be a great touch "
+           "for you guys",
+    "restaurant": "I think our reservations and table booking could be a great touch "
+                  "for you guys",
+}
+CURIOUS = " and was curious if you've ever seen our platform @spkeasy"
+
+
 def expected_dm(angle, timing, platform, first, variant=0, where=WHERE):
-    hi = f"Hey {first}!" if first else "Hey hey!"
-    product = PRODUCT[angle]
-    para = PLATFORM + "\n\n" if platform else ""
-    inline = PLATFORM + " " if platform else ""
-    if timing == "opening_soon" and variant == 0:
-        top = (f"{hi} Saw {VENUE} is opening {where}. Congrats!" if where
-               else f"{hi} Saw {VENUE} is opening soon. Congrats!")
-        return (f"{top}\n\nI'm Dylan with Speakeasy. {product}.\n\n{para}When are you guys "
-                "opening? Would love to show you what we do before then.")
-    if timing == "opening_soon":
-        top = (f"{hi} Congrats on {VENUE}. Saw you're opening {where}." if where
-               else f"{hi} Congrats on {VENUE}!")
-        return (f"{top}\n\nI'm Dylan, I work at Speakeasy. {product}.\n\n{para}When's opening "
-                "night? Would love to help you guys launch.")
-    if timing == "just_opened":
-        return (f"{hi} Congrats on opening {VENUE}.\n\nHow have the first few weeks been?\n\n"
-                f"I'm Dylan with Speakeasy. {product}. {inline}Would love to show you if "
-                "you're open to it.")
-    return (f"{hi} Congrats on taking over {VENUE}.\n\nPlanning any changes to the place?\n\n"
-            f"I'm Dylan with Speakeasy. {product}. {inline}Would love to show you what we do.")
+    hi = f"Hey {first}!" if first else "Hey team!"
+    top = DM_FIRST[timing][variant]
+    if timing == "opening_soon" and where:
+        top += " " + where
+    second = (f"Saw you guys use {platform}" if platform else DM_SECOND[timing]) + CURIOUS
+    return (f"DM 1 of 3:\n{hi}\n\n{top}\n\nDM 2 of 3:\n{second}\n\n"
+            f"DM 3 of 3:\n{DM_THIRD[angle]}")
 
 
 FIRST_LINE = {
@@ -195,35 +206,39 @@ def test_call_opener(angle, timing, platform, first, local):
 
 def test_dm_opening_soon_variants_exact():
     assert compose("dm", "bar", first="Jane", where="on N Fake St", variant=0) == (
-        "Hey Jane! Saw Zebra Fake Lounge is opening on N Fake St. Congrats!\n\n"
-        "I'm Dylan with Speakeasy. We help bars run ticketed events and text their "
-        "regulars.\n\n"
-        "When are you guys opening? Would love to show you what we do before then.")
+        "DM 1 of 3:\nHey Jane!\n\n"
+        "Ran across your page and love what you guys are building on N Fake St\n\n"
+        "DM 2 of 3:\nSaw you guys are opening soon and was curious if you've ever seen our "
+        "platform @spkeasy\n\n"
+        "DM 3 of 3:\nI think ticketed nights plus texting your regulars could be a great "
+        "touch for you guys")
     assert compose("dm", "bar", platform="Toast", where="on N Fake St", variant=1) == (
-        "Hey hey! Congrats on Zebra Fake Lounge. Saw you're opening on N Fake St.\n\n"
-        "I'm Dylan, I work at Speakeasy. We help bars run ticketed events and text their "
-        "regulars.\n\n"
-        "Saw you guys use Toast. Happy to show you how we compare if you're curious.\n\n"
-        "When's opening night? Would love to help you guys launch.")
+        "DM 1 of 3:\nHey team!\n\n"
+        "Congrats on Zebra Fake Lounge! Love what you guys are putting together on N Fake St"
+        "\n\nDM 2 of 3:\nSaw you guys use Toast and was curious if you've ever seen our "
+        "platform @spkeasy\n\n"
+        "DM 3 of 3:\nI think ticketed nights plus texting your regulars could be a great "
+        "touch for you guys")
 
 
-def test_dm_platform_inline_form():
-    text = compose("dm", "restaurant", "just_opened", platform="Toast")
-    assert text.split("\n\n")[-1] == (
-        "I'm Dylan with Speakeasy. We handle reservations, tables and POS for restaurants. "
-        "Saw you guys use Toast. Happy to show you how we compare if you're curious. "
-        "Would love to show you if you're open to it.")
-    assert "Toast" not in compose("dm", "restaurant", "just_opened")
+def test_dm_is_three_messages_with_no_intro_or_meeting_ask():
+    for timing in ("opening_soon", "just_opened", "new_owner"):
+        text = compose("dm", "club_lounge", timing, platform="Toast")
+        assert [line for line in text.splitlines() if line.startswith("DM ")] == [
+            "DM 1 of 3:", "DM 2 of 3:", "DM 3 of 3:"]
+        assert "I'm Dylan" not in text and "show you" not in text
+        assert "@spkeasy" in text.split("DM 2 of 3:")[1].split("DM 3 of 3:")[0]
+        assert "Toast" not in text.split("DM 2 of 3:")[0]  # no pitch in message 1
 
 
 def test_without_where_the_opening_line_drops_the_place():
-    assert compose("dm", where="", variant=0).split("\n\n")[0] == \
-        "Hey hey! Saw Zebra Fake Lounge is opening soon. Congrats!"
-    assert compose("dm", where="", variant=1).split("\n\n")[0] == \
-        "Hey hey! Congrats on Zebra Fake Lounge."
+    assert compose("dm", where="", variant=0).split("\n\n")[1] == \
+        "Ran across your page and love what you guys are building"
+    assert compose("dm", where="", variant=1).split("\n\n")[1] == \
+        "Congrats on Zebra Fake Lounge! Love what you guys are putting together"
     assert compose("email", where="").split("\n\n")[2] == "Congrats on Zebra Fake Lounge!"
-    assert compose("dm", where="in Austin", variant=1).split("\n\n")[0] == \
-        "Hey hey! Congrats on Zebra Fake Lounge. Saw you're opening in Austin."
+    assert compose("dm", where="in Austin", variant=1).split("\n\n")[1] == \
+        "Congrats on Zebra Fake Lounge! Love what you guys are putting together in Austin"
 
 
 def test_email_ask_local_vs_not():
@@ -281,8 +296,9 @@ def test_variant_is_stable_per_venue_and_both_occur():
     assert outreach.variant_for("IL|60601|9 FAKE ST") == zlib.crc32(b"IL|60601|9 FAKE ST") % 2
     rows = [plan_row(i, stage="Approved") for i in range(40)]
     openers = {outreach.opener(r) for r in rows}
-    assert any("Saw Zebra Fake Lounge is opening" in o for o in openers)
-    assert any("Congrats on Zebra Fake Lounge. Saw you're opening" in o for o in openers)
+    assert any("Ran across your page and love what you guys are building" in o
+               for o in openers)
+    assert any("Love what you guys are putting together" in o for o in openers)
     assert outreach.opener(rows[3]) == outreach.opener(dict(rows[3]))
 
 
@@ -308,15 +324,10 @@ def test_opener_from_row_uses_where_local_and_platform():
 def test_opener_proof_line_from_settings_only(monkeypatch):
     monkeypatch.setenv("OUTREACH_PROOF_CLUB_LOUNGE", "  Zebra Fake Proof sold out 3 nights.  ")
     proof = "Zebra Fake Proof sold out 3 nights."
-    # DM: its own paragraph right after the product sentence's paragraph.
+    # DM: its own paragraph at the end of message 3.
     dm = compose("dm", "club_lounge", "opening_soon", platform="DICE", variant=0)
-    assert dm.split("\n\n") == [
-        "Hey hey! Saw Zebra Fake Lounge is opening soon. Congrats!",
-        "I'm Dylan with Speakeasy. " + PRODUCT["club_lounge"] + ".", proof,
-        "Saw you guys use DICE. Happy to show you how we compare if you're curious.",
-        "When are you guys opening? Would love to show you what we do before then."]
-    inline = compose("dm", "club_lounge", "just_opened").split("\n\n")
-    assert inline[-1] == proof and inline[-2].startswith("I'm Dylan with Speakeasy.")
+    assert dm.split("DM 3 of 3:\n")[1] == DM_THIRD["club_lounge"] + "\n\n" + proof
+    assert "DICE" in dm.split("DM 2 of 3:")[1]
     # Email and call: after the platform line, before the ask.
     email = compose("email", "club_lounge", "just_opened", platform="DICE").split("\n\n")
     assert email[3:6] == [
@@ -481,11 +492,13 @@ def test_plan_entry_has_how_and_opener():
     assert entry["how"] == "Instagram DM: @zebrafakelounge (Verified 90)"
     assert entry["second"] == "Call"
     assert entry["channel"] == "dm"
-    first_line = ("Hey Jane! Saw Zebra Fake Lounge is opening on Fake St. Congrats!",
-                  "Hey Jane! Congrats on Zebra Fake Lounge. Saw you're opening on Fake St.")
-    assert entry["opener"].split("\n\n")[0] == \
+    first_line = ("Ran across your page and love what you guys are building on Fake St",
+                  "Congrats on Zebra Fake Lounge! Love what you guys are putting together "
+                  "on Fake St")
+    assert entry["opener"].split("\n\n")[0] == "DM 1 of 3:\nHey Jane!"
+    assert entry["opener"].split("\n\n")[1] == \
         first_line[outreach.variant_for("TX|78701|1 FAKE ST")]
-    assert "Saw you guys use SevenRooms." in entry["opener"]
+    assert "Saw you guys use SevenRooms and was curious" in entry["opener"]
     assert entry["contact_person"] == "Jane Q Tester"
     assert entry["lead_ids"] == "101"
     email = outreach.build_plan([plan_row(outreach_method="Email",
@@ -508,7 +521,7 @@ def test_sole_proprietor_owner_is_greeted_by_first_name():
     # The legal name is the person: it is the company column too.
     [entry] = outreach.build_plan([plan_row(company="Jane Q Tester",
                                             contact_person="Jane Q Tester")])
-    assert entry["opener"].startswith("Hey Jane! ")
+    assert entry["opener"].startswith("DM 1 of 3:\nHey Jane!\n\n")
 
 
 def test_fit_bullet_never_mixes_a_google_type_with_another_pitch():

@@ -44,43 +44,53 @@ from .history import ADDING_PERMIT, NEW_OWNER, NEW_VENUE
 #   {where}     "on N Clark St" from the address, or "in Chicago" without one
 #   {product}   the PRODUCT_LINES sentence for the venue, without its period
 #   {platform}  the competing platform on their site, like "SevenRooms"
-#   {platform_para} / {platform_inline}  PLATFORM_LINE when their site shows
-#               a competing platform (as its own paragraph, or inline), else
-#               nothing
 # "\n\n" is a blank line. No em dashes or semicolons in any of it.
 # ---------------------------------------------------------------------------
 
-DM_HI = "Hey hey!"
+DM_HI = "Hey team!"
 DM_HI_NAMED = "Hey {first}!"
 
-#: DM (Instagram or Facebook) by timing(). opening_soon has two variants:
-#: each venue always gets the same one (variant_for), picked from its key.
-DM_OPENERS = {
+#: An Instagram or Facebook DM is three separate messages, sent one after the
+#: other (the shape that got replies): 1 is about them with no pitch, 2 says
+#: what we noticed and asks if they have seen @spkeasy, 3 is one concrete
+#: thing we would do for them. No intro, no meeting ask.
+#: Message 1 by timing(). opening_soon has two variants: each venue always
+#: gets the same one (variant_for), picked from its key. Without a {where}
+#: the words before it stay and the place is dropped.
+DM_FIRST = {
     "opening_soon": (
-        ("{hi} Saw {venue} is opening {where}. Congrats!\n\n"
-         "I'm Dylan with Speakeasy. {product}.\n\n"
-         "{platform_para}When are you guys opening? Would love to show you what we do "
-         "before then."),
-        ("{hi} Congrats on {venue}. Saw you're opening {where}.\n\n"
-         "I'm Dylan, I work at Speakeasy. {product}.\n\n"
-         "{platform_para}When's opening night? Would love to help you guys launch."),
+        "{hi}\n\nRan across your page and love what you guys are building {where}",
+        "{hi}\n\nCongrats on {venue}! Love what you guys are putting together {where}",
     ),
-    "just_opened": (
-        ("{hi} Congrats on opening {venue}.\n\n"
-         "How have the first few weeks been?\n\n"
-         "I'm Dylan with Speakeasy. {product}. {platform_inline}Would love to show you if "
-         "you're open to it."),
-    ),
-    "new_owner": (
-        ("{hi} Congrats on taking over {venue}.\n\n"
-         "Planning any changes to the place?\n\n"
-         "I'm Dylan with Speakeasy. {product}. {platform_inline}Would love to show you what "
-         "we do."),
-    ),
+    "just_opened": ("{hi}\n\nRan across your page and love what you guys have going at {venue}",),
+    "new_owner": ("{hi}\n\nCongrats on taking over {venue}! Excited to see what you guys do "
+                  "with it",),
 }
-#: The first DM line for opening_soon when there is no {where}, per variant.
-DM_OPENING_SOON_NO_WHERE = ("{hi} Saw {venue} is opening soon. Congrats!",
-                            "{hi} Congrats on {venue}.")
+#: Message 2 by timing(), or DM_SECOND_PLATFORM when their site shows a
+#: competing platform.
+DM_SECOND = {
+    "opening_soon": ("Saw you guys are opening soon and was curious if you've ever seen our "
+                     "platform @spkeasy"),
+    "just_opened": ("Saw you guys just opened and was curious if you've ever seen our "
+                    "platform @spkeasy"),
+    "new_owner": ("Saw you guys just took over and was curious if you've ever seen our "
+                  "platform @spkeasy"),
+}
+DM_SECOND_PLATFORM = ("Saw you guys use {platform} and was curious if you've ever seen our "
+                      "platform @spkeasy")
+#: Message 3 by angle(): one concrete thing, not a feature list.
+DM_THIRD = {
+    "club_lounge": ("I think our table and bottle service booking could be a great touch "
+                    "for your nights"),
+    "ticketed": ("I think our fully white labeled ticketing pages could be a great touch "
+                 "for your events"),
+    "bar": ("I think ticketed nights plus texting your regulars could be a great touch "
+            "for you guys"),
+    "restaurant": ("I think our reservations and table booking could be a great touch "
+                   "for you guys"),
+}
+#: Heads each message in the email and the workbook so each is sent alone.
+DM_LABEL = "DM {n} of 3:"
 
 #: Product sentence, picked by angle(). No final period: the openers add it.
 PRODUCT_LINES = {
@@ -140,8 +150,8 @@ CALL_ASKS = {
 LOCAL_METROS = {"Chicago"}
 
 #: Optional proof line per angle, one sentence, from a GitHub variable (not a
-#: secret). Unset by default; when set it is its own paragraph: in a DM right
-#: after the paragraph with the product sentence, in an email or call script
+#: secret). Unset by default; when set it is its own paragraph: in a DM at the
+#: end of message 3, in an email or call script
 #: after the platform line. Never written here: the owner supplies real proof.
 PROOF_ENV = {
     "club_lounge": "OUTREACH_PROOF_CLUB_LOUNGE",
@@ -457,7 +467,8 @@ def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
                    platform: str | None = None, first: str | None = None,
                    where: str = "", local: bool = False, variant: int = 0) -> str:
     """The opener text for one channel (dm, email or call). Paragraphs are
-    separated by a blank line. An email starts with "Subject: ...".
+    separated by a blank line. An email starts with "Subject: ...". A DM is
+    three messages, each headed DM_LABEL.
     `variant` (0 or 1) picks the opening_soon DM wording, `where` is
     where_for() and `local` is is_local()."""
     product = PRODUCT_LINES[angle]
@@ -480,18 +491,14 @@ def compose_opener(channel: str, *, venue: str, angle: str, timing: str,
                       *([CALL_PLATFORM_LINE.format(platform=platform)] if platform else [])]
         paragraphs = _with_proof(paragraphs, len(paragraphs) - 1, angle)
         return "\n\n".join(paragraphs + [CALL_ASKS[bool(local)]])
-    variants = DM_OPENERS[timing]
-    pick = variant % len(variants)
-    paragraphs = variants[pick].split("\n\n")
-    if timing == "opening_soon" and not where:
-        paragraphs[0] = DM_OPENING_SOON_NO_WHERE[pick]
-    after = next(i for i, p in enumerate(paragraphs) if "{product}" in p)
-    slots = {"hi": DM_HI_NAMED.format(first=first) if first else DM_HI, "venue": venue,
-             "where": where, "product": product,
-             "platform_para": platform_line + "\n\n" if platform else "",
-             "platform_inline": platform_line + " " if platform else ""}
-    paragraphs = _with_proof([p.format(**slots) for p in paragraphs], after, angle)
-    return "\n\n".join(paragraphs)
+    variants = DM_FIRST[timing]
+    hi = DM_HI_NAMED.format(first=first) if first else DM_HI
+    first_msg = variants[variant % len(variants)].format(hi=hi, venue=venue, where=where)
+    second = (DM_SECOND_PLATFORM.format(platform=platform) if platform
+              else DM_SECOND[timing])
+    third = "\n\n".join(_with_proof([DM_THIRD[angle]], 0, angle))
+    messages = [first_msg.rstrip(), second, third]
+    return "\n\n".join(DM_LABEL.format(n=n) + "\n" + m for n, m in enumerate(messages, 1))
 
 
 def opener(row: dict) -> str:

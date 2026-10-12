@@ -490,9 +490,10 @@ def test_contact_counts_only_once_the_lookup_has_run(fake_xlsx):
 
 def assert_street_only_in_openers(body):
     """The full address stays on the sheet. An opener may name the street
-    ("opening on Zebra Stripe Way"), never the house number."""
+    ("building on Zebra Stripe Way"), never the house number."""
     assert not re.search(r"\d+ Zebra Stripe Way", body)
-    assert body.count("Zebra Stripe Way") == body.count("opening on Zebra Stripe Way")
+    assert body.count("Zebra Stripe Way") == len(
+        re.findall(r"(?:building|putting together) on Zebra Stripe Way", body))
 
 
 def test_email_counts_instagram_found_by_search(fake_xlsx):
@@ -544,7 +545,7 @@ def test_email_body_has_the_plan_in_both_parts(fake_xlsx):
     assert "Second best way: Call" in plain
     assert "Contact person on the filing: Jane Q Tester" in plain
     assert "Opener (DM):\n\n" + item["opener"] in plain
-    assert item["opener"].startswith("Hey Jane! ")
+    assert item["opener"].startswith("DM 1 of 3:\nHey Jane!\n\n")
     assert "on Zebra Stripe Way" in item["opener"]
     # counts block first, then the plan, then source health
     assert plain.index("By market") < plain.index("Today's plan") < plain.index("All 1 source")
