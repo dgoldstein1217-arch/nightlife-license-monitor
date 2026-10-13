@@ -39,8 +39,9 @@ REVIEW_STATUSES = ("new", "approved", "rejected", "contacted", "snoozed", "repli
                    "wrong_contact", "won")
 
 
-# Neon Free stops accepting writes at 512 MB. Fail loudly well before that so
-# the owner gets a red run + email instead of silent data loss.
+# The database is on Neon Launch (since 2026-10-13): no hard cap, storage is billed
+# per GB-month. The alarm is a cost guard: a red run + email when storage grows
+# past STORAGE_ALARM_MB (production sets 2000). The 400 default suits Neon Free.
 STORAGE_ALARM_MB = float(os.environ.get("STORAGE_ALARM_MB", "400"))
 
 
@@ -55,8 +56,8 @@ def cmd_run(args) -> int:
     with db.connect() as conn:
         size = db.database_mb(conn)
     if size >= STORAGE_ALARM_MB:
-        log.error("STORAGE ALARM: database is %.0f MB (alarm at %.0f MB, Neon Free "
-                  "limit 512 MB). Lower RAW_RETENTION_DAYS or upgrade the plan.",
+        log.error("STORAGE ALARM: database is %.0f MB (alarm at %.0f MB). Lower "
+                  "RAW_RETENTION_DAYS, or raise STORAGE_ALARM_MB if the cost is fine.",
                   size, STORAGE_ALARM_MB)
         code = 1
     else:

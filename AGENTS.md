@@ -531,8 +531,11 @@ stored records.
   Fetch it with `uv run licmon probe --source <name>`, compare to the parser in
   `src/licmon/sources/<file>.py`, fix it, add or update the test fixture
   (synthetic data only, never real rows), run the tests, commit.
-- **STORAGE ALARM in the log.** Neon Free stops saving new data at 512 MB. The
-  run turns red at 400 MB. First keep fewer days of raw downloads:
+- **STORAGE ALARM in the log.** The database is on Neon Launch (upgraded
+  2026-10-13, org BIZZY): no hard cap, storage costs about $0.35 per GB-month.
+  The run turns red at `STORAGE_ALARM_MB` (production variable, 2000 MB) as a
+  cost check. Either raise it if the owner is fine with the cost, or keep fewer
+  days of raw downloads:
   `gh variable set RAW_RETENTION_DAYS --body 7` (default 14;
   old ones are trimmed on the next run). If that is not enough, tell the owner
   the Neon plan needs an upgrade. Check size with
